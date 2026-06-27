@@ -183,3 +183,10 @@ desktop.ini
 # ---- Un-ignore models directory and all its contents ----
 !models/
 !models/**
+
+# ---- Un-ignore scrapper CSV source data ----
+!scrapper/**/*.csv
+
+# ---- Downloaded corpus (PDFs organised by category) ----
+documents/*/
+checkpoint.json

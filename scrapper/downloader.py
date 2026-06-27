@@ -2,12 +2,20 @@
 Bulk document downloader — Municipalidad de Rosario
 Downloads PDFs from open-data CSVs and organizes them by category.
 
-Usage:
-    pip install aiohttp aiofiles tqdm beautifulsoup4 lxml weasyprint
+CLI usage:
     python downloader.py [--output ./downloads] [--concurrency 5] [--delay 0.5]
+                         [--csv-dir ./scrapper] [--checkpoint ./checkpoint.json]
+
+Google Colab usage:
+    import importlib.util, sys
+    spec = importlib.util.spec_from_file_location("downloader", "/path/to/downloader.py")
+    mod = importlib.util.load_from_spec(spec); spec.loader.exec_module(mod)
+    await mod.run_colab(output="/content/drive/MyDrive/downloads",
+                        csv_dir="/content/drive/MyDrive/scrapper/20260627",
+                        concurrency=3, delay=1.0)
 
 Environment variables:
-    SCRAPPER_DIR  — path to the folder containing CSVs (default: ./Scrapper)
+    SCRAPPER_DIR  — path to the folder containing CSVs (default: directory of this file)
 
 Supported link types:
     direct_pdf   — URL already points to the PDF (newer boletines)
@@ -21,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import csv
 import json
 import logging
@@ -37,7 +46,6 @@ if TYPE_CHECKING:
 
 import aiofiles
 import aiohttp
-import weasyprint
 from bs4 import BeautifulSoup
 from tqdm.asyncio import tqdm
 
@@ -50,9 +58,15 @@ BASE_URL = "https://www.rosario.gob.ar"
 HTTP_OK = 200
 HTTP_NOT_FOUND = 404
 
-# Can be overridden via environment variable (useful in Colab/Azure)
-SCRAPPER_DIR = Path(os.environ.get("SCRAPPER_DIR", str(Path(__file__).parent / "scrapper")))
-CHECKPOINT_FILE = Path(__file__).parent / "checkpoint.json"
+# __file__ is undefined in Jupyter/Colab; fall back to cwd
+try:
+    _THIS_DIR = Path(__file__).parent
+except NameError:
+    _THIS_DIR = Path.cwd()
+
+# Can be overridden via environment variable or run_colab() parameter
+SCRAPPER_DIR = Path(os.environ.get("SCRAPPER_DIR", str(_THIS_DIR)))
+CHECKPOINT_FILE = _THIS_DIR / "checkpoint.json"
 
 CSV_CONFIG = {
     "boletines.csv": {
@@ -138,13 +152,18 @@ HEADERS = {
     "Accept-Language": "es-AR,es;q=0.9",
 }
 
+
+def _build_handlers() -> list[logging.Handler]:
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    with contextlib.suppress(OSError):
+        handlers.insert(0, logging.FileHandler("downloader.log", encoding="utf-8"))
+    return handlers
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("downloader.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
+    handlers=_build_handlers(),
 )
 log = logging.getLogger(__name__)
 
@@ -270,7 +289,7 @@ def extract_pdf_url_from_html(html: str, page_url: str) -> str | None:
     Returns:
         The absolute PDF URL if found, or None if no PDF link is detected.
     """
-    soup = BeautifulSoup(html, "lxml")
+    soup: BeautifulSoup = BeautifulSoup(html, "lxml")
 
     def resolve(href: str) -> str:
         return href if href.startswith("http") else urljoin(page_url, href)
@@ -292,20 +311,22 @@ def extract_pdf_url_from_html(html: str, page_url: str) -> str | None:
 SKIP_PREFIX = "SKIP:"
 
 
-def load_checkpoint() -> set:
+def load_checkpoint(path: Path | None = None) -> set:
     """Load the set of checkpoint keys from disk.
 
     Returns:
         Set of string keys for completed and permanently-skipped items.
     """
-    if CHECKPOINT_FILE.exists():
-        with Path(CHECKPOINT_FILE).open(encoding="utf-8") as f:
+    ckpt = path or CHECKPOINT_FILE
+    if ckpt.exists():
+        with ckpt.open(encoding="utf-8") as f:
             return set(json.load(f))
     return set()
 
 
-def save_checkpoint(done: set) -> None:
-    with Path(CHECKPOINT_FILE).open("w", encoding="utf-8") as f:
+def save_checkpoint(done: set, path: Path | None = None) -> None:
+    ckpt = path or CHECKPOINT_FILE
+    with ckpt.open("w", encoding="utf-8") as f:
         json.dump(list(done), f)
 
 
@@ -508,12 +529,33 @@ def sanitize(text: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "_", text).strip()
 
 
-def build_task_list(output_dir: Path) -> list[dict]:
+def _resolve_csv_path(csv_dir: Path, csv_file: str) -> Path | None:
+    """Find *csv_file* in *csv_dir*, falling back to a case-insensitive name match.
+
+    Returns:
+        Resolved Path if found, else None.
+    """
+    exact = csv_dir / csv_file
+    if exact.exists():
+        return exact
+
+    def _normalize(name: str) -> str:
+        return re.sub(r"[\s\-]+", "_", name).lower()
+
+    target = _normalize(csv_file)
+    for candidate in csv_dir.iterdir():
+        if candidate.suffix.lower() == ".csv" and _normalize(candidate.name) == target:
+            return candidate
+    return None
+
+
+def build_task_list(output_dir: Path, csv_dir: Path | None = None) -> list[dict]:
+    src_dir = csv_dir if csv_dir is not None else SCRAPPER_DIR
     tasks = []
     for csv_file, cfg in CSV_CONFIG.items():
-        csv_path = SCRAPPER_DIR / csv_file
-        if not csv_path.exists():
-            log.warning("CSV not found: %s", csv_path)
+        csv_path = _resolve_csv_path(src_dir, csv_file)
+        if csv_path is None:
+            log.warning("CSV not found: %s", src_dir / csv_file)
             continue
 
         folder = output_dir / cfg["folder"]
@@ -653,6 +695,8 @@ async def html_to_pdf_file(
     try:
 
         def _convert() -> None:
+            import weasyprint  # noqa: PLC0415 — lazy: requires GTK system libs
+
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             weasyprint.HTML(string=html, base_url=final_url).write_pdf(str(dest_path))
 
@@ -669,7 +713,7 @@ async def html_to_pdf_file(
 # ──────────────────────────────────────────────────────────────
 
 
-def _apply_migration(tasks: list[dict], done: set) -> None:
+def _apply_migration(tasks: list[dict], done: set, checkpoint_file: Path | None = None) -> None:
     """Unblock tasks previously marked SKIP that now have a dedicated handler.
 
     Mutates *done* in place and persists the checkpoint when entries are removed.
@@ -679,7 +723,7 @@ def _apply_migration(tasks: list[dict], done: set) -> None:
     removed = len(done & keys_to_unblock)
     if removed:
         done -= keys_to_unblock
-        save_checkpoint(done)
+        save_checkpoint(done, checkpoint_file)
         log.info("Migration: %d SKIP entries unblocked for reprocessing", removed)
 
 
@@ -688,6 +732,7 @@ async def _expand_boletines(
     tasks: list[dict],
     done: set,
     delay: float,
+    checkpoint_file: Path | None = None,
 ) -> list[dict]:
     """Phase 1: replace boletin_html container tasks with their individual PDF tasks.
 
@@ -703,7 +748,7 @@ async def _expand_boletines(
     expanded = await expand_boletin_tasks(session, boletin_html_tasks, delay)
     log.info("→ %d internal PDFs found in boletines", len(expanded))
     done.update(SKIP_PREFIX + t["key"] for t in boletin_html_tasks)
-    save_checkpoint(done)
+    save_checkpoint(done, checkpoint_file)
     return [t for t in tasks if t["link_type"] != "boletin_html"] + expanded
 
 
@@ -738,6 +783,7 @@ class _DownloadCtx:
     session: aiohttp.ClientSession
     semaphore: asyncio.Semaphore
     delay: float
+    checkpoint_file: Path | None = None
 
 
 async def _process_task(
@@ -765,7 +811,7 @@ async def _process_task(
             stats["ok"] += 1
             done.add(task["key"])
             if stats["ok"] % 50 == 0:
-                save_checkpoint(done)
+                save_checkpoint(done, ctx.checkpoint_file)
                 log.info("Checkpoint: %d OK so far", stats["ok"])
         elif outcome == "PERMANENT":
             stats["permanent"] += 1
@@ -779,27 +825,38 @@ async def _process_task(
 # ──────────────────────────────────────────────────────────────
 
 
-async def run(output_dir: Path, concurrency: int, delay: float) -> None:
-    tasks = build_task_list(output_dir)
-    done = load_checkpoint()
-    _apply_migration(tasks, done)
+async def run(
+    output_dir: Path,
+    concurrency: int,
+    delay: float,
+    csv_dir: Path | None = None,
+    checkpoint_file: Path | None = None,
+) -> None:
+    tasks = build_task_list(output_dir, csv_dir=csv_dir)
+    done = load_checkpoint(checkpoint_file)
+    _apply_migration(tasks, done, checkpoint_file)
 
     connector = aiohttp.TCPConnector(limit=concurrency, ssl=False)
     stats: dict[str, int] = {"ok": 0, "permanent": 0, "transient": 0}
 
     async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = await _expand_boletines(session, tasks, done, delay)
+        tasks = await _expand_boletines(session, tasks, done, delay, checkpoint_file)
         pending = await _filter_pending(tasks, done)
         _log_progress(tasks, pending, done)
 
-        ctx = _DownloadCtx(session=session, semaphore=asyncio.Semaphore(concurrency), delay=delay)
+        ctx = _DownloadCtx(
+            session=session,
+            semaphore=asyncio.Semaphore(concurrency),
+            delay=delay,
+            checkpoint_file=checkpoint_file,
+        )
         await tqdm.gather(
             *[_process_task(ctx, t, done, stats) for t in pending],
             desc="Downloading",
             total=len(pending),
         )
 
-    save_checkpoint(done)
+    save_checkpoint(done, checkpoint_file)
     log.info(
         "Done. OK: %d | No PDF/permanent: %d | Network error (retryable): %d",
         stats["ok"],
@@ -809,12 +866,40 @@ async def run(output_dir: Path, concurrency: int, delay: float) -> None:
 
 
 # ──────────────────────────────────────────────────────────────
-# Entry point
+# Entry points
 # ──────────────────────────────────────────────────────────────
 
 
-def main() -> None:
+async def run_colab(
+    output: str = "./downloads",
+    concurrency: int = 3,
+    delay: float = 1.0,
+    csv_dir: str | None = None,
+    checkpoint: str | None = None,
+) -> None:
+    """Async entry point for Google Colab notebooks.
 
+    Call with ``await run_colab(...)`` in a notebook cell.
+
+    Args:
+        output:      Destination folder for downloaded PDFs.
+        concurrency: Parallel downloads — keep ≤ 3 in Colab to avoid rate-limiting.
+        delay:       Seconds between requests.
+        csv_dir:     Path to the folder containing the CSV files.
+                     Defaults to SCRAPPER_DIR (set via env var or module default).
+        checkpoint:  Path to the checkpoint JSON file.
+                     Defaults to CHECKPOINT_FILE (cwd/checkpoint.json).
+    """
+    output_dir = Path(output).resolve()  # noqa: ASYNC240
+    output_dir.mkdir(exist_ok=True, parents=True)
+    src = Path(csv_dir) if csv_dir else SCRAPPER_DIR
+    ckpt = Path(checkpoint) if checkpoint else None
+    log.info("csv_dir: %s | checkpoint: %s", src, ckpt or CHECKPOINT_FILE)
+    log.info("Output: %s | Concurrency: %d | Delay: %.1fs", output_dir, concurrency, delay)
+    await run(output_dir, concurrency, delay, csv_dir=src, checkpoint_file=ckpt)
+
+
+def main() -> None:
     parser = argparse.ArgumentParser(description="Bulk downloader — Municipalidad de Rosario")
     parser.add_argument("--output", default="./downloads")
     parser.add_argument(
@@ -826,17 +911,37 @@ def main() -> None:
     parser.add_argument(
         "--delay", type=float, default=0.5, help="Seconds to wait between requests (default: 0.5)"
     )
+    parser.add_argument(
+        "--csv-dir",
+        default=None,
+        help="Path to the folder containing CSV files (overrides SCRAPPER_DIR env var)",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Path to the checkpoint JSON file (default: checkpoint.json next to this script)",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    csv_dir = Path(args.csv_dir) if args.csv_dir else None
+    checkpoint_file = Path(args.checkpoint) if args.checkpoint else None
 
-    log.info("SCRAPPER_DIR: %s", SCRAPPER_DIR)
+    log.info("csv_dir: %s", csv_dir or SCRAPPER_DIR)
     log.info(
         "Output: %s | Concurrency: %d | Delay: %.1fs", output_dir, args.concurrency, args.delay
     )
 
-    asyncio.run(run(output_dir, args.concurrency, args.delay))
+    asyncio.run(
+        run(
+            output_dir,
+            args.concurrency,
+            args.delay,
+            csv_dir=csv_dir,
+            checkpoint_file=checkpoint_file,
+        )
+    )
 
 
 if __name__ == "__main__":
