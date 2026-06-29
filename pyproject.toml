@@ -51,7 +51,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/classiflow"]
+packages = ["src/classiflow", "src/scrapper"]
 
 #########################
 # RUFF
@@ -305,6 +305,7 @@ addopts = [
     "-vvv",
 ]
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.poe.tasks]
 lint = { shell = "ruff check . && ruff format --check ." }
