@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import ClassVar
 
 import pytest
 
@@ -12,7 +13,6 @@ from classiflow.ingestion.schema import (
     DocumentType,
     Source,
 )
-
 
 # ── Source enum ──────────────────────────────────────────────────────────────
 
@@ -36,7 +36,7 @@ class TestSourceEnum:
         assert Source("santa_fe") is Source.SANTA_FE
 
     def test_invalid_value_raises(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="unknown"):
             Source("unknown")
 
 
@@ -66,7 +66,7 @@ class TestContentFormatEnum:
 
 
 class TestDocumentTypeEnum:
-    _EXPECTED_VALUES = {
+    _EXPECTED_VALUES: ClassVar[set[str]] = {
         "decreto",
         "decreto_concejo",
         "ordenanza",
@@ -115,7 +115,7 @@ class TestDocumentTypeEnum:
         assert DocumentType(value).value == value
 
     def test_invalid_raises(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="not_a_type"):
             DocumentType("not_a_type")
 
 
@@ -148,7 +148,8 @@ class TestCanonicalDocumentCreation:
         assert _FULL_DOC.number == "123"
 
     def test_year_field(self) -> None:
-        assert _FULL_DOC.year == 2024
+        expected_year = 2024
+        assert _FULL_DOC.year == expected_year
 
     def test_subject_field(self) -> None:
         assert _FULL_DOC.subject == "Presupuesto municipal"

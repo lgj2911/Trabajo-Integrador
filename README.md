@@ -56,11 +56,15 @@ Sources (inputs)
 ├── documents/                      Reference documents and architecture diagrams
 ├── notebooks/                      Jupyter notebooks
 │   └── colab_downloader.ipynb      Bulk download via Google Colab
-├── scrapper/                       Phase 1 — ingestion scripts and CSV metadata
-│   ├── downloader.py               Async bulk downloader
-│   └── *.csv                       One CSV per document category (10 types)
 ├── src/
-│   └── classiflow/                 Main Python package
+│   ├── classiflow/                 Classification package (developed in a separate repo)
+│   └── scrapper/                   Phase 1 — modular downloader package + CSV metadata
+│       ├── __main__.py             `python -m scrapper` entry point
+│       ├── cli.py                  Unified CLI (choose municipality: rosario | santafe)
+│       ├── common/                 Shared: config, logging, checkpoint, urls, download engine
+│       ├── rosario/                Rosario scraper (config, extract, resolve, tasks, htmlpdf, pipeline)
+│       ├── santafe/                Santa Fe scraper (config, extract, sitemap, tasks, pipeline)
+│       └── *.csv                   One CSV per document category (10 types)
 ├── pyproject.toml                  Dependencies and tool configuration (managed by uv)
 └── uv.lock                         Locked dependency graph
 ```
@@ -94,17 +98,27 @@ Always use `uv sync` — do not use `pip install`.
 
 ## Running the Downloader (Phase 1)
 
+The scraper is a package with a unified CLI. Choose the municipality with the
+first argument:
+
 ```bash
-uv run python scrapper/downloader.py --output ./downloads --concurrency 5 --delay 0.5
+# Municipalidad de Rosario (primary ingestion target)
+uv run python -m scrapper rosario --output ./downloads --concurrency 5 --delay 0.5
+
+# Municipalidad de Santa Fe (test corpus for classification validation)
+uv run python -m scrapper santafe --output ./downloads_santa_fe --concurrency 5 --delay 0.5
 ```
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--output` | `./downloads` | Destination folder for PDFs |
+| `--output` | `./downloads` | Destination folder for the documents |
 | `--concurrency` | `5` | Parallel downloads — keep ≤ 5 to avoid rate-limiting |
 | `--delay` | `0.5` | Seconds between requests |
+| `--checkpoint` | per municipality | Path to the checkpoint JSON file |
 
-A `checkpoint.json` file tracks progress; re-running skips already-downloaded files.
+Rosario also accepts `--csv-dir`; Santa Fe accepts `--collections`. A checkpoint
+file tracks progress (`checkpoint.json` for Rosario, `checkpoint_santa_fe.json`
+for Santa Fe); re-running skips already-downloaded files.
 
 Alternatively, open `notebooks/colab_downloader.ipynb` in Google Colab to run the downloader using cloud resources without any local setup.
 

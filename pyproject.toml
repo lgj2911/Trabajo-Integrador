@@ -26,6 +26,8 @@ dev = [
     "poethepoet==0.37.0",
     "joblib-stubs==1.5.0.1.20250510",
     "lxml-stubs>=0.5.1",
+    "types-aiofiles>=25.1.0.20260518",
+    "types-tqdm>=4.69.0.20260724",
 ]
 lint = [
     "pre-commit==4.3.0",
@@ -111,7 +113,7 @@ warn_unused_configs = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["google.*"]
+module = ["google.*", "weasyprint.*"]
 ignore_missing_imports = true
 
 #########################

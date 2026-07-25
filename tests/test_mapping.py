@@ -8,7 +8,6 @@ import pytest
 
 from classiflow.ingestion.mapping import (
     ROSARIO_DOC_TYPE_BY_CSV,
-    SANTA_FE_DOC_TYPE_BY_COLLECTION,
     SANTA_FE_NORMATIVA_TYPE_BY_SLUG_PREFIX,
     _parse_rosario_date,
     _santa_fe_collection,
@@ -22,7 +21,6 @@ from classiflow.ingestion.schema import (
     DocumentType,
     Source,
 )
-
 
 # ── _parse_rosario_date ───────────────────────────────────────────────────────
 
@@ -59,7 +57,7 @@ class TestParseRosarioDate:
 
 class TestRosarioDocTypeByCsv:
     @pytest.mark.parametrize(
-        "csv_filename, expected_type",
+        ("csv_filename", "expected_type"),
         [
             ("boletines.csv", DocumentType.BOLETIN),
             ("compendios_de_boletines.csv", DocumentType.COMPENDIO_BOLETINES),
@@ -83,10 +81,7 @@ class TestRosarioDocTypeByCsv:
 # ── map_rosario_row ───────────────────────────────────────────────────────────
 
 
-class TestMapRosarioRow:
-    def _minimal_row(self) -> dict[str, str]:
-        return {}
-
+class TestMapRosarioRowCore:
     def test_returns_canonical_document(self) -> None:
         result = map_rosario_row({}, "decretos.csv", None)
         assert isinstance(result, CanonicalDocument)
@@ -103,6 +98,8 @@ class TestMapRosarioRow:
         result = map_rosario_row({}, "unknown.csv", None)
         assert result.doc_type is DocumentType.OTRO
 
+
+class TestMapRosarioRowNumberAndYear:
     def test_number_from_row(self) -> None:
         result = map_rosario_row({"NUMERO": "1234"}, "decretos.csv", None)
         assert result.number == "1234"
@@ -116,8 +113,9 @@ class TestMapRosarioRow:
         assert result.number is None
 
     def test_year_from_row(self) -> None:
+        expected_year = 2024
         result = map_rosario_row({"ANIO": "2024"}, "decretos.csv", None)
-        assert result.year == 2024
+        assert result.year == expected_year
 
     def test_non_digit_year_is_none(self) -> None:
         result = map_rosario_row({"ANIO": "abc"}, "decretos.csv", None)
@@ -127,6 +125,8 @@ class TestMapRosarioRow:
         result = map_rosario_row({}, "decretos.csv", None)
         assert result.year is None
 
+
+class TestMapRosarioRowSubjectAndDates:
     def test_subject_from_row(self) -> None:
         result = map_rosario_row({"ASUNTO": "Presupuesto"}, "decretos.csv", None)
         assert result.subject == "Presupuesto"
@@ -147,6 +147,8 @@ class TestMapRosarioRow:
         result = map_rosario_row({"FEC_PUBLICACION_BOLETIN": "15/06/2024"}, "decretos.csv", None)
         assert result.publication_date == date(2024, 6, 15)
 
+
+class TestMapRosarioRowSourceUrl:
     def test_source_url_prefers_texto_vigente(self) -> None:
         row = {
             "TEXTO_VIGENTE_NORMA": "https://vigente.example.com",
@@ -162,8 +164,10 @@ class TestMapRosarioRow:
 
     def test_source_url_empty_when_both_absent(self) -> None:
         result = map_rosario_row({}, "decretos.csv", None)
-        assert result.source_url == ""
+        assert not result.source_url
 
+
+class TestMapRosarioRowContent:
     def test_content_path_passed_through(self) -> None:
         result = map_rosario_row({}, "decretos.csv", "/path/to/file.pdf")
         assert result.content_path == "/path/to/file.pdf"
@@ -176,6 +180,8 @@ class TestMapRosarioRow:
         result = map_rosario_row({}, "decretos.csv", None)
         assert result.content_format is None
 
+
+class TestMapRosarioRowRawMetadata:
     def test_raw_metadata_captures_known_fields(self) -> None:
         row = {
             "NRO_BOLETIN": "99",
@@ -227,7 +233,7 @@ class TestSantaFeCollection:
 
 class TestSantaFeDocType:
     @pytest.mark.parametrize(
-        "slug_prefix, expected_type",
+        ("slug_prefix", "expected_type"),
         [
             ("resolucion-conjunta-001-2024", DocumentType.RESOLUCION_CONJUNTA),
             ("resolucion-dem-012-2023", DocumentType.RESOLUCION),
@@ -239,8 +245,6 @@ class TestSantaFeDocType:
     )
     def test_normativa_slug_patterns(self, slug_prefix: str, expected_type: DocumentType) -> None:
         url = f"https://transparencia.santafeciudad.gov.ar/normativa/{slug_prefix}/"
-        from classiflow.ingestion.mapping import _santa_fe_doc_type
-
         assert _santa_fe_doc_type(url) is expected_type
 
     def test_unknown_normativa_slug_returns_otro(self) -> None:
@@ -248,7 +252,7 @@ class TestSantaFeDocType:
         assert _santa_fe_doc_type(url) is DocumentType.OTRO
 
     @pytest.mark.parametrize(
-        "collection, expected_type",
+        ("collection", "expected_type"),
         [
             ("compras-y-contrataciones", DocumentType.COMPRA),
             ("contratacion-obra", DocumentType.CONTRATACION),
@@ -256,9 +260,7 @@ class TestSantaFeDocType:
             ("convocatorias-anteriores", DocumentType.CONVOCATORIA),
         ],
     )
-    def test_non_normativa_collections(
-        self, collection: str, expected_type: DocumentType
-    ) -> None:
+    def test_non_normativa_collections(self, collection: str, expected_type: DocumentType) -> None:
         url = f"https://transparencia.santafeciudad.gov.ar/{collection}/some-slug/"
         assert _santa_fe_doc_type(url) is expected_type
 

@@ -8,18 +8,18 @@ import pytest
 
 from scrapper.downloader_santa_fe import (
     SKIP_PREFIX,
-    _collection_from_url,
-    _dest_folder,
-    _normativa_type,
-    _parse_sitemap_locs,
-    _sitemap_matches,
-    _slug_from_url,
     build_task_list,
     extract_body_text,
     extract_wp_pdf_url,
     is_pending,
 )
-
+from scrapper.santafe.sitemap import _parse_sitemap_locs, _sitemap_matches
+from scrapper.santafe.tasks import (
+    _collection_from_url,
+    _dest_folder,
+    _normativa_type,
+    _slug_from_url,
+)
 
 # ── _slug_from_url ────────────────────────────────────────────────────────────
 
@@ -70,7 +70,7 @@ class TestCollectionFromUrl:
 
 class TestNormativaType:
     @pytest.mark.parametrize(
-        "slug, expected_folder",
+        ("slug", "expected_folder"),
         [
             ("resolucion-conjunta-001-2024", "resolucion_conjunta"),
             ("resolucion-dem-005-2023", "resolucion_dem"),
@@ -208,7 +208,8 @@ class TestParseSitemapLocs:
 
     def test_count_matches_number_of_loc_elements(self) -> None:
         result = _parse_sitemap_locs(self._SITEMAP_WITH_NS)
-        assert len(result) == 2
+        expected_count = 2
+        assert len(result) == expected_count
 
 
 # ── is_pending (Santa Fe flavour) ────────────────────────────────────────────
@@ -261,7 +262,9 @@ class TestExtractWpPdfUrl:
         assert "resoluciones.pdf" in result
 
     def test_finds_pdf_in_data_attribute(self) -> None:
-        html = '<object data="/wp-content/uploads/2024/contrato.pdf" type="application/pdf"></object>'
+        html = (
+            '<object data="/wp-content/uploads/2024/contrato.pdf" type="application/pdf"></object>'
+        )
         page_url = "https://transparencia.santafeciudad.gov.ar/normativa/some-page/"
         result = extract_wp_pdf_url(html, page_url)
         assert result is not None
@@ -380,7 +383,8 @@ class TestBuildTaskList:
             "https://transparencia.santafeciudad.gov.ar/normativa/ordenanza-001-2023/",
         ]
         tasks = build_task_list(Path("/output"), urls)
-        assert len(tasks) == 2
+        expected_count = 2
+        assert len(tasks) == expected_count
 
     def test_task_has_required_keys(self) -> None:
         urls = ["https://transparencia.santafeciudad.gov.ar/normativa/decreto-dmm-1-2024/"]

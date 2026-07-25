@@ -57,11 +57,17 @@ Sources (inputs)
 ├── documents/                      Reference documents and architecture diagrams
 ├── notebooks/                      Jupyter notebooks
 │   └── colab_downloader.ipynb      Bulk download via Google Colab
-├── scrapper/                       Ingestion scripts and CSV metadata
-│   ├── downloader.py               Async bulk downloader — Phase 1 ingestion
-│   └── *.csv                       One CSV per document category (10 types)
 ├── src/
-│   └── classiflow/                 Main Python package
+│   ├── classiflow/                 Classification package (developed in a separate repo)
+│   └── scrapper/                   Modular downloader package + CSV metadata
+│       ├── __main__.py             `python -m scrapper` entry point
+│       ├── cli.py                  Unified CLI (choose municipality: rosario | santafe)
+│       ├── common/                 Shared: config, logging, checkpoint, urls, download engine
+│       ├── rosario/                Rosario scraper: config, extract, resolve, tasks, htmlpdf, pipeline
+│       ├── santafe/                Santa Fe scraper: config, extract, sitemap, tasks, pipeline
+│       ├── downloader.py           Back-compat facade -> scrapper.rosario
+│       ├── downloader_santa_fe.py  Back-compat facade -> scrapper.santafe
+│       └── *.csv                   One CSV per document category (10 types)
 ├── pyproject.toml                  Dependencies and tool configuration (managed by uv)
 ├── uv.lock                         Locked dependency graph
 ├── .pre-commit-config.yaml         Pre-commit hooks (ruff, mypy, gitleaks, uv-lock)
@@ -78,16 +84,27 @@ The `.venv/` directory is gitignored. Always use `uv sync` — do not use `pip i
 
 ## Running the downloader (ingestion Phase 1)
 
+The scraper is a package with a unified CLI. Choose the municipality with the
+first argument:
+
 ```bash
-uv run python scrapper/downloader.py --output ./downloads --concurrency 5 --delay 0.5
+# Municipalidad de Rosario (primary ingestion target)
+uv run python -m scrapper rosario --output ./downloads --concurrency 5 --delay 0.5
+
+# Municipalidad de Santa Fe (test corpus for classification validation)
+uv run python -m scrapper santafe --output ./downloads_santa_fe --concurrency 5 --delay 0.5
 ```
 
-Arguments:
-- `--output` — destination folder (default: `./downloads`)
+Shared arguments:
+- `--output` — destination folder
 - `--concurrency` — parallel downloads, keep ≤ 5 to avoid rate-limiting (default: 5)
 - `--delay` — seconds between requests (default: 0.5)
+- `--checkpoint` — path to the checkpoint JSON file
 
-A `checkpoint.json` file tracks progress; re-running skips already-downloaded files.
+Rosario also accepts `--csv-dir`; Santa Fe accepts `--collections`.
+
+A checkpoint file tracks progress (`checkpoint.json` for Rosario,
+`checkpoint_santa_fe.json` for Santa Fe); re-running skips already-downloaded files.
 
 ## Code revision
 
