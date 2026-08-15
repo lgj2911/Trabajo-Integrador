@@ -62,7 +62,7 @@ async def html_to_pdf_file(
             weasyprint.HTML(string=html, base_url=final_url).write_pdf(str(dest_path))
 
         await loop.run_in_executor(None, _convert)
-    except (OSError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 — a single broken doc must not kill the run
         log.warning("weasyprint failed for %s: %s", url, exc)
         return "PERMANENT"
     else:

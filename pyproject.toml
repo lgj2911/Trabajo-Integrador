@@ -10,6 +10,7 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
     "weasyprint>=61.0",
+    "mineru[pipeline]>=3.4.4",
 ]
 
 [dependency-groups]
@@ -46,7 +47,12 @@ name = "pytorch-cu128"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu128" }
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
+]
+torchvision = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
+]
 
 [build-system]
 requires = ["hatchling"]
