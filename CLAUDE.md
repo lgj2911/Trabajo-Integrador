@@ -1,52 +1,31 @@
-# CLAUDE.md — Classiflow
+# CLAUDE.md — Scrapper
 
-Classiflow is a multi-agent document classification system for Municipalidad de Rosario (Argentina).
-It ingests municipal documents from multiple sources, extracts and enriches their content, classifies
-them using LLM agents with confidence scoring, and exposes the results through a chat interface and
-a web UI.
+This repository covers only the ingestion (Scrapper) phase of Classiflow, a document
+classification project for Municipalidad de Rosario (Argentina). The scraper downloads
+municipal documents (PDFs, and Plone HTML pages converted to PDF) from the Rosario and
+Santa Fe municipal portals into a local corpus for downstream classification, which is
+developed in a separate repository. This repo does not contain any classification,
+agent, or web UI code — only the downloader.
 
 ## Architecture
 
 ```
 Sources (inputs)
-  ├── Municipal dataset (CSV + PDFs)
-  ├── Web scraping
-  └── Manual upload (PDF · DOCX · img)
+  ├── Rosario: municipal CSV dataset (idNormativa, boletines, Plone HTML pages)
+  └── Santa Fe: transparency portal (sitemap + normativa pages)
           │
           ▼
   ┌─────────────────────────────────────────────┐
-  │                 Orchestrator                │
-  │                                             │
-  │  Ingestion ──► Text extraction              │
-  │                     │                       │
-  │              Refinement and enrichment       │
-  │                     │                       │
-  │  ┌──────────────────────────────────────┐   │
-  │  │  Ingestion agent                     │   │
-  │  │  receives · validates · detects lang │   │
-  │  │                                      │   │
-  │  │  Classification agent                │   │
-  │  │  document type · confidence score    │   │
-  │  │                                      │   │
-  │  │  Confidence gate                     │   │
-  │  │  auto · review · escalation          │   │
-  │  │                                      │   │
-  │  │  Routing agent                       │   │
-  │  │  directory · audit log               │   │
-  │  └──────────────────────────────────────┘   │
+  │                    CLI                       │
+  │        `python -m scrapper <municipality>`   │
+  │                                               │
+  │  Link resolution ──► Download ──► Checkpoint │
+  │  (direct_pdf · normativa · boletin_html ·    │
+  │   html_to_pdf · scrape_page)                 │
   └─────────────────────────────────────────────┘
           │
-          ├── Knowledge base (chunks · vectors · sources)
-          │         │
-          │   Chat agent (query · retrieve · respond with sources)
-          │
-          ├── Outputs
-          │     ├── Classified documents
-          │     ├── Review queue (low confidence)
-          │     └── Audit log (every decision)
-          │
-          └── Web interface
-                upload · agent visualization · classification · chat
+          ▼
+  Downloaded documents (Phase 1 output — PDFs per category)
 ```
 
 ## Project structure
@@ -58,7 +37,6 @@ Sources (inputs)
 ├── notebooks/                      Jupyter notebooks
 │   └── colab_downloader.ipynb      Bulk download via Google Colab
 ├── src/
-│   ├── classiflow/                 Classification package (developed in a separate repo)
 │   └── scrapper/                   Modular downloader package + CSV metadata
 │       ├── __main__.py             `python -m scrapper` entry point
 │       ├── cli.py                  Unified CLI (choose municipality: rosario | santafe)
@@ -68,6 +46,7 @@ Sources (inputs)
 │       ├── downloader.py           Back-compat facade -> scrapper.rosario
 │       ├── downloader_santa_fe.py  Back-compat facade -> scrapper.santafe
 │       └── *.csv                   One CSV per document category (10 types)
+├── tests/                          Unit tests for scrapper pure functions
 ├── pyproject.toml                  Dependencies and tool configuration (managed by uv)
 ├── uv.lock                         Locked dependency graph
 ├── .pre-commit-config.yaml         Pre-commit hooks (ruff, mypy, gitleaks, uv-lock)
@@ -150,7 +129,7 @@ Hooks enforced on every commit (see `.pre-commit-config.yaml`):
 ## Conventions
 
 - **Python**: standard library + aiohttp / aiofiles / tqdm / beautifulsoup4 / weasyprint.
-- Package source lives in `src/classiflow/`. Scripts live in `scrapper/`.
+- Package source lives in `src/scrapper/`. Tests live in `tests/`.
 - All comments, docstrings, and commit messages are in English.
 - Line length: 100. Quote style: double. (Configured in `[tool.ruff]`.)
 - Type annotations required on all functions in `src/` (mypy strict).

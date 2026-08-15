@@ -1,52 +1,10 @@
-# Classiflow
+# Scrapper
 
-A multi-agent document classification system for Municipalidad de Rosario (Argentina).
-
-Classiflow ingests municipal documents from multiple sources, extracts and enriches their content, classifies them using LLM agents with confidence scoring, and exposes the results through a chat interface and a web UI.
-
-## Architecture
-
-```
-Sources (inputs)
-  ├── Municipal dataset (CSV + PDFs)
-  ├── Web scraping
-  └── Manual upload (PDF · DOCX · img)
-          │
-          ▼
-  ┌─────────────────────────────────────────────┐
-  │                 Orchestrator                │
-  │                                             │
-  │  Ingestion ──► Text extraction              │
-  │                     │                       │
-  │              Refinement and enrichment      │
-  │                     │                       │
-  │  ┌──────────────────────────────────────┐   │
-  │  │  Ingestion agent                     │   │
-  │  │  receives · validates · detects lang │   │
-  │  │                                      │   │
-  │  │  Classification agent                │   │
-  │  │  document type · confidence score    │   │
-  │  │                                      │   │
-  │  │  Confidence gate                     │   │
-  │  │  auto · review · escalation          │   │
-  │  │                                      │   │
-  │  │  Routing agent                       │   │
-  │  │  directory · audit log               │   │
-  │  └──────────────────────────────────────┘   │
-  └─────────────────────────────────────────────┘
-          │
-          ├── Knowledge base (chunks · vectors · sources)
-          │         │
-          │   Chat agent (query · retrieve · respond with sources)
-          │
-          ├── Outputs
-          │     ├── Classified documents
-          │     ├── Review queue (low confidence)
-          │     └── Audit log (every decision)
-          │
-          └── Web interface
-                upload · agent visualization · classification · chat
-```
+The ingestion (Phase 1) component of Classiflow, a document classification project for
+Municipalidad de Rosario (Argentina). This repository covers only the downloader: it
+fetches municipal documents from the Rosario and Santa Fe portals into a local corpus.
+Classification, confidence scoring, and the web/chat interface are developed in a
+separate repository and are out of scope here.
 
 ## Repository Structure
 
@@ -57,7 +15,6 @@ Sources (inputs)
 ├── notebooks/                      Jupyter notebooks
 │   └── colab_downloader.ipynb      Bulk download via Google Colab
 ├── src/
-│   ├── classiflow/                 Classification package (developed in a separate repo)
 │   └── scrapper/                   Phase 1 — modular downloader package + CSV metadata
 │       ├── __main__.py             `python -m scrapper` entry point
 │       ├── cli.py                  Unified CLI (choose municipality: rosario | santafe)
@@ -65,6 +22,7 @@ Sources (inputs)
 │       ├── rosario/                Rosario scraper (config, extract, resolve, tasks, htmlpdf, pipeline)
 │       ├── santafe/                Santa Fe scraper (config, extract, sitemap, tasks, pipeline)
 │       └── *.csv                   One CSV per document category (10 types)
+├── tests/                          Unit tests for scrapper pure functions
 ├── pyproject.toml                  Dependencies and tool configuration (managed by uv)
 └── uv.lock                         Locked dependency graph
 ```
