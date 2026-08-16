@@ -78,6 +78,9 @@ Rosario also accepts `--csv-dir`; Santa Fe accepts `--collections`. A checkpoint
 file tracks progress (`checkpoint.json` for Rosario, `checkpoint_santa_fe.json`
 for Santa Fe); re-running skips already-downloaded files.
 
+Each run also appends to `manifest.csv` inside the output folder — a row per
+document saved, with timestamp, category, filename, source URL and destination path.
+
 Alternatively, open `notebooks/colab_downloader.ipynb` in Google Colab to run the downloader using cloud resources without any local setup.
 
 ## Development

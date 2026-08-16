@@ -18,6 +18,7 @@ from scrapper.common.checkpoint import (
 )
 from scrapper.common.downloader import DownloadCtx, download_pdf
 from scrapper.common.logging_setup import configure_logging
+from scrapper.common.manifest import append_manifest_row
 from scrapper.rosario.config import CHECKPOINT_FILE, LOG_FILE, SCRAPPER_DIR
 from scrapper.rosario.htmlpdf import html_to_pdf_file
 from scrapper.rosario.resolve import resolve_pdf_url
@@ -119,6 +120,17 @@ async def _process_task(
         if outcome is True:
             stats["ok"] += 1
             done.add(task["key"])
+            if ctx.manifest_file is not None:
+                append_manifest_row(
+                    ctx.manifest_file,
+                    {
+                        "source": "rosario",
+                        "category": task["folder"].name,
+                        "filename": task["dest"].name,
+                        "source_url": task["page_url"],
+                        "dest_path": str(task["dest"]),
+                    },
+                )
             if stats["ok"] % 50 == 0 and ctx.checkpoint_file is not None:
                 save_checkpoint(done, ctx.checkpoint_file)
                 log.info("Checkpoint: %d OK so far", stats["ok"])
@@ -155,6 +167,7 @@ async def run(
             semaphore=asyncio.Semaphore(concurrency),
             delay=delay,
             checkpoint_file=ckpt,
+            manifest_file=output_dir / "manifest.csv",
         )
         await tqdm.gather(
             *[_process_task(ctx, t, done, stats) for t in pending],

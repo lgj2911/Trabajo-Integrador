@@ -32,6 +32,7 @@ class DownloadCtx:
     semaphore: asyncio.Semaphore
     delay: float
     checkpoint_file: Path | None = None
+    manifest_file: Path | None = None
 
 
 async def _fetch_pdf_bytes(

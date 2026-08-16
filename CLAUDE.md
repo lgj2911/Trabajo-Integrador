@@ -85,6 +85,10 @@ Rosario also accepts `--csv-dir`; Santa Fe accepts `--collections`.
 A checkpoint file tracks progress (`checkpoint.json` for Rosario,
 `checkpoint_santa_fe.json` for Santa Fe); re-running skips already-downloaded files.
 
+Each run also appends to `manifest.csv` inside `--output` — a human-readable ledger
+(timestamp, source, category, filename, source URL, destination path) of every
+document saved, one row per download.
+
 ## Code revision
 
 **Run after every modification:**

@@ -18,6 +18,7 @@ from scrapper.common.checkpoint import (
 from scrapper.common.config import HEADERS, HTTP_NOT_FOUND, HTTP_OK
 from scrapper.common.downloader import DownloadCtx, download_pdf, save_text
 from scrapper.common.logging_setup import configure_logging
+from scrapper.common.manifest import append_manifest_row
 from scrapper.santafe.config import ALL_COLLECTIONS, CHECKPOINT_FILE, LOG_FILE
 from scrapper.santafe.extract import extract_body_text, extract_wp_pdf_url
 from scrapper.santafe.sitemap import enumerate_all_urls
@@ -45,11 +46,28 @@ async def _fetch_page_html(
         return resp.status, html, str(resp.url)
 
 
+def _record_manifest(ctx: DownloadCtx, task: SantaFeTask, dest: Path, output_dir: Path) -> None:
+    """Append a manifest row for a successfully saved document."""
+    if ctx.manifest_file is None:
+        return
+    append_manifest_row(
+        ctx.manifest_file,
+        {
+            "source": "santa_fe",
+            "category": str(task["dest_folder"].relative_to(output_dir)),
+            "filename": dest.name,
+            "source_url": task["page_url"],
+            "dest_path": str(dest),
+        },
+    )
+
+
 async def _process_task(
     ctx: DownloadCtx,
     task: SantaFeTask,
     done: set[str],
     stats: dict[str, int],
+    output_dir: Path,
 ) -> None:
     """Fetch a document page, download the PDF if present, or save the text."""
     async with ctx.semaphore:
@@ -78,6 +96,7 @@ async def _process_task(
             if result is True:
                 done.add(task["key"])
                 stats["ok_pdf"] += 1
+                _record_manifest(ctx, task, dest, output_dir)
             elif result == "PERMANENT":
                 done.add(SKIP_PREFIX + task["key"])
                 stats["permanent"] += 1
@@ -94,6 +113,7 @@ async def _process_task(
             await save_text(text, dest)
             done.add(task["key"])
             stats["ok_text"] += 1
+            _record_manifest(ctx, task, dest, output_dir)
 
         total_ok = stats["ok_pdf"] + stats["ok_text"]
         if total_ok > 0 and total_ok % 50 == 0 and ctx.checkpoint_file is not None:
@@ -138,9 +158,10 @@ async def run(
             semaphore=asyncio.Semaphore(concurrency),
             delay=delay,
             checkpoint_file=ckpt,
+            manifest_file=output_dir / "manifest.csv",
         )
         await tqdm.gather(
-            *[_process_task(ctx, t, done, stats) for t in pending],
+            *[_process_task(ctx, t, done, stats, output_dir) for t in pending],
             desc="Downloading",
             total=len(pending),
         )
