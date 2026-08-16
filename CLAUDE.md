@@ -1,52 +1,31 @@
-# CLAUDE.md — Classiflow
+# CLAUDE.md — Scrapper
 
-Classiflow is a multi-agent document classification system for Municipalidad de Rosario (Argentina).
-It ingests municipal documents from multiple sources, extracts and enriches their content, classifies
-them using LLM agents with confidence scoring, and exposes the results through a chat interface and
-a web UI.
+This repository covers only the ingestion (Scrapper) phase of Classiflow, a document
+classification project for Municipalidad de Rosario (Argentina). The scraper downloads
+municipal documents (PDFs, and Plone HTML pages converted to PDF) from the Rosario and
+Santa Fe municipal portals into a local corpus for downstream classification, which is
+developed in a separate repository. This repo does not contain any classification,
+agent, or web UI code — only the downloader.
 
 ## Architecture
 
 ```
 Sources (inputs)
-  ├── Municipal dataset (CSV + PDFs)
-  ├── Web scraping
-  └── Manual upload (PDF · DOCX · img)
+  ├── Rosario: municipal CSV dataset (idNormativa, boletines, Plone HTML pages)
+  └── Santa Fe: transparency portal (sitemap + normativa pages)
           │
           ▼
   ┌─────────────────────────────────────────────┐
-  │                 Orchestrator                │
-  │                                             │
-  │  Ingestion ──► Text extraction              │
-  │                     │                       │
-  │              Refinement and enrichment       │
-  │                     │                       │
-  │  ┌──────────────────────────────────────┐   │
-  │  │  Ingestion agent                     │   │
-  │  │  receives · validates · detects lang │   │
-  │  │                                      │   │
-  │  │  Classification agent                │   │
-  │  │  document type · confidence score    │   │
-  │  │                                      │   │
-  │  │  Confidence gate                     │   │
-  │  │  auto · review · escalation          │   │
-  │  │                                      │   │
-  │  │  Routing agent                       │   │
-  │  │  directory · audit log               │   │
-  │  └──────────────────────────────────────┘   │
+  │                    CLI                       │
+  │        `python -m scrapper <municipality>`   │
+  │                                               │
+  │  Link resolution ──► Download ──► Checkpoint │
+  │  (direct_pdf · normativa · boletin_html ·    │
+  │   html_to_pdf · scrape_page)                 │
   └─────────────────────────────────────────────┘
           │
-          ├── Knowledge base (chunks · vectors · sources)
-          │         │
-          │   Chat agent (query · retrieve · respond with sources)
-          │
-          ├── Outputs
-          │     ├── Classified documents
-          │     ├── Review queue (low confidence)
-          │     └── Audit log (every decision)
-          │
-          └── Web interface
-                upload · agent visualization · classification · chat
+          ▼
+  Downloaded documents (Phase 1 output — PDFs per category)
 ```
 
 ## Project structure
@@ -57,11 +36,17 @@ Sources (inputs)
 ├── documents/                      Reference documents and architecture diagrams
 ├── notebooks/                      Jupyter notebooks
 │   └── colab_downloader.ipynb      Bulk download via Google Colab
-├── scrapper/                       Ingestion scripts and CSV metadata
-│   ├── downloader.py               Async bulk downloader — Phase 1 ingestion
-│   └── *.csv                       One CSV per document category (10 types)
 ├── src/
-│   └── classiflow/                 Main Python package
+│   └── scrapper/                   Modular downloader package + CSV metadata
+│       ├── __main__.py             `python -m scrapper` entry point
+│       ├── cli.py                  Unified CLI (choose municipality: rosario | santafe)
+│       ├── common/                 Shared: config, logging, checkpoint, urls, download engine
+│       ├── rosario/                Rosario scraper: config, extract, resolve, tasks, htmlpdf, pipeline
+│       ├── santafe/                Santa Fe scraper: config, extract, sitemap, tasks, pipeline
+│       ├── downloader.py           Back-compat facade -> scrapper.rosario
+│       ├── downloader_santa_fe.py  Back-compat facade -> scrapper.santafe
+│       └── *.csv                   One CSV per document category (10 types)
+├── tests/                          Unit tests for scrapper pure functions
 ├── pyproject.toml                  Dependencies and tool configuration (managed by uv)
 ├── uv.lock                         Locked dependency graph
 ├── .pre-commit-config.yaml         Pre-commit hooks (ruff, mypy, gitleaks, uv-lock)
@@ -78,16 +63,31 @@ The `.venv/` directory is gitignored. Always use `uv sync` — do not use `pip i
 
 ## Running the downloader (ingestion Phase 1)
 
+The scraper is a package with a unified CLI. Choose the municipality with the
+first argument:
+
 ```bash
-uv run python scrapper/downloader.py --output ./downloads --concurrency 5 --delay 0.5
+# Municipalidad de Rosario (primary ingestion target)
+uv run python -m scrapper rosario --output ./downloads --concurrency 5 --delay 0.5
+
+# Municipalidad de Santa Fe (test corpus for classification validation)
+uv run python -m scrapper santafe --output ./downloads_santa_fe --concurrency 5 --delay 0.5
 ```
 
-Arguments:
-- `--output` — destination folder (default: `./downloads`)
+Shared arguments:
+- `--output` — destination folder
 - `--concurrency` — parallel downloads, keep ≤ 5 to avoid rate-limiting (default: 5)
 - `--delay` — seconds between requests (default: 0.5)
+- `--checkpoint` — path to the checkpoint JSON file
 
-A `checkpoint.json` file tracks progress; re-running skips already-downloaded files.
+Rosario also accepts `--csv-dir`; Santa Fe accepts `--collections`.
+
+A checkpoint file tracks progress (`checkpoint.json` for Rosario,
+`checkpoint_santa_fe.json` for Santa Fe); re-running skips already-downloaded files.
+
+Each run also appends to `manifest.csv` inside `--output` — a human-readable ledger
+(timestamp, source, category, filename, source URL, destination path) of every
+document saved, one row per download.
 
 ## Code revision
 
@@ -133,7 +133,7 @@ Hooks enforced on every commit (see `.pre-commit-config.yaml`):
 ## Conventions
 
 - **Python**: standard library + aiohttp / aiofiles / tqdm / beautifulsoup4 / weasyprint.
-- Package source lives in `src/classiflow/`. Scripts live in `scrapper/`.
+- Package source lives in `src/scrapper/`. Tests live in `tests/`.
 - All comments, docstrings, and commit messages are in English.
 - Line length: 100. Quote style: double. (Configured in `[tool.ruff]`.)
 - Type annotations required on all functions in `src/` (mypy strict).

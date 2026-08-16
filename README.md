@@ -1,52 +1,10 @@
-# Classiflow
+# Scrapper
 
-A multi-agent document classification system for Municipalidad de Rosario (Argentina).
-
-Classiflow ingests municipal documents from multiple sources, extracts and enriches their content, classifies them using LLM agents with confidence scoring, and exposes the results through a chat interface and a web UI.
-
-## Architecture
-
-```
-Sources (inputs)
-  ├── Municipal dataset (CSV + PDFs)
-  ├── Web scraping
-  └── Manual upload (PDF · DOCX · img)
-          │
-          ▼
-  ┌─────────────────────────────────────────────┐
-  │                 Orchestrator                │
-  │                                             │
-  │  Ingestion ──► Text extraction              │
-  │                     │                       │
-  │              Refinement and enrichment      │
-  │                     │                       │
-  │  ┌──────────────────────────────────────┐   │
-  │  │  Ingestion agent                     │   │
-  │  │  receives · validates · detects lang │   │
-  │  │                                      │   │
-  │  │  Classification agent                │   │
-  │  │  document type · confidence score    │   │
-  │  │                                      │   │
-  │  │  Confidence gate                     │   │
-  │  │  auto · review · escalation          │   │
-  │  │                                      │   │
-  │  │  Routing agent                       │   │
-  │  │  directory · audit log               │   │
-  │  └──────────────────────────────────────┘   │
-  └─────────────────────────────────────────────┘
-          │
-          ├── Knowledge base (chunks · vectors · sources)
-          │         │
-          │   Chat agent (query · retrieve · respond with sources)
-          │
-          ├── Outputs
-          │     ├── Classified documents
-          │     ├── Review queue (low confidence)
-          │     └── Audit log (every decision)
-          │
-          └── Web interface
-                upload · agent visualization · classification · chat
-```
+The ingestion (Phase 1) component of Classiflow, a document classification project for
+Municipalidad de Rosario (Argentina). This repository covers only the downloader: it
+fetches municipal documents from the Rosario and Santa Fe portals into a local corpus.
+Classification, confidence scoring, and the web/chat interface are developed in a
+separate repository and are out of scope here.
 
 ## Repository Structure
 
@@ -56,11 +14,15 @@ Sources (inputs)
 ├── documents/                      Reference documents and architecture diagrams
 ├── notebooks/                      Jupyter notebooks
 │   └── colab_downloader.ipynb      Bulk download via Google Colab
-├── scrapper/                       Phase 1 — ingestion scripts and CSV metadata
-│   ├── downloader.py               Async bulk downloader
-│   └── *.csv                       One CSV per document category (10 types)
 ├── src/
-│   └── classiflow/                 Main Python package
+│   └── scrapper/                   Phase 1 — modular downloader package + CSV metadata
+│       ├── __main__.py             `python -m scrapper` entry point
+│       ├── cli.py                  Unified CLI (choose municipality: rosario | santafe)
+│       ├── common/                 Shared: config, logging, checkpoint, urls, download engine
+│       ├── rosario/                Rosario scraper (config, extract, resolve, tasks, htmlpdf, pipeline)
+│       ├── santafe/                Santa Fe scraper (config, extract, sitemap, tasks, pipeline)
+│       └── *.csv                   One CSV per document category (10 types)
+├── tests/                          Unit tests for scrapper pure functions
 ├── pyproject.toml                  Dependencies and tool configuration (managed by uv)
 └── uv.lock                         Locked dependency graph
 ```
@@ -94,17 +56,30 @@ Always use `uv sync` — do not use `pip install`.
 
 ## Running the Downloader (Phase 1)
 
+The scraper is a package with a unified CLI. Choose the municipality with the
+first argument:
+
 ```bash
-uv run python scrapper/downloader.py --output ./downloads --concurrency 5 --delay 0.5
+# Municipalidad de Rosario (primary ingestion target)
+uv run python -m scrapper rosario --output ./downloads --concurrency 5 --delay 0.5
+
+# Municipalidad de Santa Fe (test corpus for classification validation)
+uv run python -m scrapper santafe --output ./downloads_santa_fe --concurrency 5 --delay 0.5
 ```
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--output` | `./downloads` | Destination folder for PDFs |
+| `--output` | `./downloads` | Destination folder for the documents |
 | `--concurrency` | `5` | Parallel downloads — keep ≤ 5 to avoid rate-limiting |
 | `--delay` | `0.5` | Seconds between requests |
+| `--checkpoint` | per municipality | Path to the checkpoint JSON file |
 
-A `checkpoint.json` file tracks progress; re-running skips already-downloaded files.
+Rosario also accepts `--csv-dir`; Santa Fe accepts `--collections`. A checkpoint
+file tracks progress (`checkpoint.json` for Rosario, `checkpoint_santa_fe.json`
+for Santa Fe); re-running skips already-downloaded files.
+
+Each run also appends to `manifest.csv` inside the output folder — a row per
+document saved, with timestamp, category, filename, source URL and destination path.
 
 Alternatively, open `notebooks/colab_downloader.ipynb` in Google Colab to run the downloader using cloud resources without any local setup.
 

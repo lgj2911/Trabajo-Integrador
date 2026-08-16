@@ -7,17 +7,19 @@ from bs4 import BeautifulSoup
 
 from scrapper.downloader import (
     SKIP_PREFIX,
-    _apply_migration,
-    _is_pdf_url,
-    _search_all_attrs,
-    _search_raw_html,
-    _search_tagged_elements,
     build_normativa_pdf_url,
     extract_pdf_url_from_html,
     is_pending,
     normalize_url,
     sanitize,
 )
+from scrapper.rosario.extract import (
+    _is_pdf_url,
+    _search_all_attrs,
+    _search_raw_html,
+    _search_tagged_elements,
+)
+from scrapper.rosario.pipeline import _apply_migration
 
 # ── normalize_url ────────────────────────────────────────────
 
