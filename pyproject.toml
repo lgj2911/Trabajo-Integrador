@@ -27,6 +27,7 @@ dev = [
     "lxml-stubs>=0.5.1",
     "types-aiofiles>=25.1.0.20260518",
     "types-tqdm>=4.69.0.20260724",
+    "types-passlib>=1.7.7.20260211",
 ]
 lint = [
     "pre-commit==4.3.0",
@@ -35,16 +36,30 @@ lint = [
 versioning = [
     "python-semantic-release==10.3.1",
 ]
+api = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.12",
+    "aiosqlite>=0.20",
+    "itsdangerous>=2.2",
+    "passlib[bcrypt]>=1.7",
+    # passlib 1.7.4 (last release) probes bcrypt via a removed `__about__.__version__`
+    # attribute and a wrap-bug self-test that newer bcrypt rejects outright (ValueError
+    # instead of the old silent-truncate behavior). Pin below 4.1 so passlib's backend
+    # detection keeps working. See passlib/passlib#146 and pyca/bcrypt#684.
+    "bcrypt<4.1",
+    "pydantic-settings>=2.5",
+]
 
 [tool.uv]
-default-groups = ["dev"]
+default-groups = ["dev", "api"]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/scrapper"]
+packages = ["src/scrapper", "src/scrapper_api"]
 
 #########################
 # RUFF
@@ -307,6 +322,6 @@ typecheck = { shell = "mypy src && nbqa mypy notebooks" }
 nbtest = { cmd = "pytest --nbmake notebooks --ignore=notebooks/colab_downloader.ipynb", env = { USE_MOCK_LLM = "true" } }
 test = "pytest tests"
 check = ["lint", "typecheck", "nbtest"]
-serve = "uvicorn semantic_ai_agent.api.app:app --reload --port 8000"
+api = { shell = "uvicorn scrapper_api.app:app --reload --port 8000" }
 precommit = "uv run pre-commit run --all-files --verbose"
 precommit-update = "uv run pre-commit run --hook-stage manual pre-commit-update"

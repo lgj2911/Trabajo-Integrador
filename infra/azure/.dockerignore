@@ -1,0 +1,45 @@
+# Keep the Docker build context small and avoid busting layer caches with
+# unrelated files. Build context is the repo root (docker build -f
+# infra/azure/Dockerfile .), so paths here are relative to the repo root.
+#
+# NOTE: Docker only auto-applies a `.dockerignore` living at the *context root*
+# (repo root here) or one named `<Dockerfile>.dockerignore` sitting next to a
+# Dockerfile referenced via `-f`. Since our context root is the repo root (not
+# infra/azure/) and the Dockerfile lives in infra/azure/, this file is kept in
+# sync with infra/azure/Dockerfile.dockerignore (identical content) so it's
+# picked up regardless of how the build is invoked. Update both if you change
+# this list.
+
+.git
+.github
+.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.vscode
+.claude
+
+# Local run artifacts / large data — never needed inside the image.
+downloads/
+downloads_santa_fe/
+checkpoint*.json
+*.log
+htmlcov/
+coverage.xml
+pytest-report.xml
+.coverage
+
+# Frontend and notebooks are not part of the backend image.
+frontend/
+notebooks/
+
+# Docs not needed at build time.
+documents/
+*.md
+
+# Python bytecode / caches.
+__pycache__/
+*.pyc
+
+# OS cruft.
+.DS_Store

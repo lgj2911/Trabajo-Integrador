@@ -1,0 +1,80 @@
+# Validation-only CI: lint/typecheck/test/build for both the backend and the
+# frontend. There is deliberately no deployment step here — deployment is the
+# manual/scripted path at infra/azure/scripts/deploy.sh, run by a human.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend (scrapper + scrapper_api)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run checks (lint, typecheck, notebooks)
+        run: uv run poe check
+
+      - name: Run tests
+        # Points at the repo's existing `tests/` directory the same way `poe
+        # test` does. This will also pick up `tests/api/` once the backend
+        # agent's work lands there — no assumption is made that it exists yet.
+        run: uv run pytest tests
+
+  frontend:
+    name: Frontend (React app)
+    runs-on: ubuntu-latest
+    # `frontend/` is being built in parallel by another agent and may not exist
+    # yet at the time a given commit is pushed. Guard on package.json so this
+    # job no-ops (rather than hard-failing the whole workflow) until it lands.
+    # TODO: remove this guard once frontend/ is confirmed to always exist.
+    if: hashFiles('frontend/package.json') != ''
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          # No `cache: npm` here: actions/setup-node's cache step hard-fails if
+          # its dependency-path glob (package-lock.json) doesn't resolve, and
+          # frontend/ doesn't have a committed lockfile yet at the time this
+          # workflow was written. Add caching back once frontend/package-lock.json
+          # is committed.
+
+      - name: Install dependencies
+        # Falls back to `npm install` if package-lock.json isn't present yet
+        # (frontend/ is still being built in parallel); switch to a plain
+        # `npm ci` once a lockfile is committed, for reproducible installs.
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        # --if-present: the frontend doesn't have a "test" script defined yet
+        # (as of when this workflow was written). Once one is added, this runs
+        # it normally; until then it's a no-op instead of a hard CI failure.
+        run: npm test --if-present
+
+      - name: Build
+        run: npm run build
