@@ -50,9 +50,10 @@ directly. **Do not "optimize" this into an in-process call.**
   web sessions from hammering the Rosario servers beyond the `concurrency`/`delay`
   guidance already documented in `CLAUDE.md`. Never parallelize this queue.
 - Each session is isolated: `data/sessions/<id>/{csv_input/, output/, checkpoint.json,
-  execution.log, result.zip}`. No corpus is shared across sessions — re-downloading
-  previously-fetched documents across sessions is an accepted, deliberate tradeoff for
-  simplicity, not a bug.
+  execution.log, result.zip}`. No corpus is shared across sessions *by default* —
+  re-downloading previously-fetched documents across sessions is the accepted
+  baseline behavior, not a bug. An operator can opt out of that per-session via the
+  resume-seed feature below.
 - `output/manifest.csv` (written by the scraper subprocess itself) is the single
   source of truth for "which files got scraped" — the backend never duplicates that
   into SQLite. `sessions.db` (SQLite via `aiosqlite`) only holds session *metadata*
@@ -75,14 +76,40 @@ directly. **Do not "optimize" this into an in-process call.**
 Both paths converge on the same thing: a populated `csv_input/` dir, after which
 everything (subprocess invocation, logging, manifest, zip) is identical.
 
+## Optional resume-seed: skipping documents from a previous corpus
+
+`POST /api/sessions` also accepts optional `resume_manifest` / `resume_checkpoint`
+uploads — a `manifest.csv` and/or `checkpoint.json` from a corpus already
+downloaded elsewhere (a prior CLI/Colab run, or a previous web session's output).
+`sessions/resume_seed.py` parses them and `routers/sessions_router.py` pre-seeds
+the new session's `checkpoint.json` with what they identify as already-downloaded,
+*before* its subprocess ever starts — `sessions/manager.py` needs no changes at
+all, since it already points `--checkpoint` at that same path and the CLI's
+`load_checkpoint` just reads whatever is there.
+
+The one non-obvious part: `checkpoint.json`'s keys are **absolute destination file
+paths** (`scrapper.rosario.tasks.build_task_list`: `key = str(dest)`,
+`dest = output_dir / category_folder / filename`), and every session gets a
+fresh, uniquely-named `output_dir`. A raw checkpoint/manifest from a *different*
+run's paths will never string-match this session's freshly-computed task keys —
+uploading one as-is would silently skip nothing. `resume_seed.py` fixes this by
+re-deriving `category`/`filename` from each source (manifest.csv rows have those
+as explicit columns; a checkpoint key's `Path(key).parent.name` /
+`Path(key).name` give the same pair by construction) and rewriting
+`new_key = str(new_output_dir / category / filename)` before writing them into
+the new checkpoint. If `scrapper.rosario.tasks`'s dest-path formula (folder +
+filename) ever changes, this remapping needs to change with it. `SKIP:`-prefixed
+checkpoint entries (permanent failures) are carried forward the same way, so a
+resumed session doesn't retry known-dead documents either.
+
 ## Auth
 
 Single hardcoded operator account. `POST /api/auth/login` checks the password with
 `passlib` (bcrypt) against `WEBAPP_PASSWORD_HASH`, then issues an httpOnly,
 `Secure`, `SameSite=None` cookie signed with `itsdangerous.TimestampSigner` (not a
 full JWT — one user doesn't need JWKS/rotation machinery). `SameSite=None` is
-required because the frontend (Static Web Apps) and backend (Container Apps) are
-different origins in production; this also means **`TestClient` in tests needs
+required because the frontend (Storage static website) and backend (Container
+Apps) are different origins in production; this also means **`TestClient` in tests needs
 `base_url="https://testserver"`**, or httpx silently drops the `Secure` cookie and
 every "authenticated" test call 401s for no obvious reason (this bit the original
 implementation — see `tests/api/conftest.py`).

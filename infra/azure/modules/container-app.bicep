@@ -42,7 +42,7 @@ param webappPasswordHash string = ''
 @secure()
 param sessionSecret string = ''
 
-@description('Comma-separated list of allowed CORS origins (must include the Static Web App\'s https URL).')
+@description('Comma-separated list of allowed CORS origins (must include the static website\'s https URL).')
 param corsOrigins string
 
 @description('Minimum replica count. 0 enables scale-to-zero for cost; a cold start will incur request latency on the next call.')
@@ -63,6 +63,17 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing 
 resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: acrRegistryName
 }
+
+// Container Apps rejects a secret entry whose value is an empty string, but
+// webappPasswordHash/sessionSecret are deliberately empty on initial provisioning
+// (see scripts/set-secrets.sh). So these two are only declared as secrets -- and
+// their env vars only wired via secretRef -- once a real value exists; until then
+// the env vars fall back to an inline empty value, which src/scrapper_api/auth.py
+// already treats as "no password configured, all logins fail".
+var optionalSecrets = concat(
+  empty(webappPasswordHash) ? [] : [{ name: 'webapp-password-hash', value: webappPasswordHash }],
+  empty(sessionSecret) ? [] : [{ name: 'session-secret', value: sessionSecret }]
+)
 
 resource environment 'Microsoft.App/managedEnvironments@2023-05-01' = {
   name: environmentName
@@ -111,26 +122,30 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
           passwordSecretRef: 'acr-password'
         }
       ]
-      secrets: [
-        {
-          name: 'acr-password'
-          value: acr.listCredentials().passwords[0].value
-        }
-        {
-          name: 'webapp-password-hash'
-          value: webappPasswordHash
-        }
-        {
-          name: 'session-secret'
-          value: sessionSecret
-        }
-      ]
+      secrets: concat(
+        [
+          {
+            name: 'acr-password'
+            value: acr.listCredentials().passwords[0].value
+          }
+        ],
+        optionalSecrets
+      )
     }
     template: {
       containers: [
         {
           name: 'scrapper-api'
-          image: '${acr.properties.loginServer}/scrapper-api:${containerImageTag}'
+          // On the very first deploy the ACR is empty -- there is no scrapper-api
+          // image to pull yet, and containerImageTag is still its untouched 'latest'
+          // default (scripts/deploy.sh always overrides it with a real git-SHA tag
+          // once it has actually pushed one via `az acr build`). Use Microsoft's
+          // public quickstart placeholder in that bootstrap case so the Container
+          // App resource can provision at all; scripts/deploy.sh swaps in the real
+          // image right after.
+          image: containerImageTag == 'latest'
+            ? 'mcr.microsoft.com/k8se/quickstart:latest'
+            : '${acr.properties.loginServer}/scrapper-api:${containerImageTag}'
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
@@ -144,14 +159,12 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
               name: 'WEBAPP_USERNAME'
               value: webappUsername
             }
-            {
-              name: 'WEBAPP_PASSWORD_HASH'
-              secretRef: 'webapp-password-hash'
-            }
-            {
-              name: 'SESSION_SECRET'
-              secretRef: 'session-secret'
-            }
+            empty(webappPasswordHash)
+              ? { name: 'WEBAPP_PASSWORD_HASH', value: '' }
+              : { name: 'WEBAPP_PASSWORD_HASH', secretRef: 'webapp-password-hash' }
+            empty(sessionSecret)
+              ? { name: 'SESSION_SECRET', value: '' }
+              : { name: 'SESSION_SECRET', secretRef: 'session-secret' }
             {
               name: 'CORS_ORIGINS'
               value: corsOrigins

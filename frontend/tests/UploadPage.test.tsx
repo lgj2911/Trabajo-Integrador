@@ -82,4 +82,25 @@ describe("UploadPage", () => {
 
     expect(await screen.findByText(/execution detail page/i)).toBeInTheDocument();
   });
+
+  it("attaches an optional resume manifest to the submitted form", async () => {
+    vi.mocked(apiClient.postForm).mockResolvedValue(sampleSession);
+    const user = userEvent.setup();
+    renderPage();
+
+    const zipFile = new File(["zipcontent"], "data.zip", { type: "application/zip" });
+    fireEvent.change(screen.getByLabelText(/file-input/i), { target: { files: [zipFile] } });
+
+    const manifestFile = new File(["csvcontent"], "manifest.csv", { type: "text/csv" });
+    fireEvent.change(screen.getByLabelText(/manifest\.csv/i), {
+      target: { files: [manifestFile] },
+    });
+
+    await user.click(screen.getByRole("button", { name: /upload and start scrape/i }));
+
+    expect(await screen.findByText(/execution detail page/i)).toBeInTheDocument();
+    const submittedForm = vi.mocked(apiClient.postForm).mock.calls[0]?.[1] as FormData;
+    expect(submittedForm.get("resume_manifest")).toBe(manifestFile);
+    expect(submittedForm.get("resume_checkpoint")).toBeNull();
+  });
 });

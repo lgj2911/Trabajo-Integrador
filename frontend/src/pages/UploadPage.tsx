@@ -10,6 +10,8 @@ export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [concurrency, setConcurrency] = useState("5");
   const [delay, setDelay] = useState("0.5");
+  const [resumeManifest, setResumeManifest] = useState<File | null>(null);
+  const [resumeCheckpoint, setResumeCheckpoint] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
@@ -30,6 +32,8 @@ export default function UploadPage() {
     }
     if (concurrency.trim() !== "") form.set("concurrency", concurrency.trim());
     if (delay.trim() !== "") form.set("delay", delay.trim());
+    if (resumeManifest) form.set("resume_manifest", resumeManifest);
+    if (resumeCheckpoint) form.set("resume_checkpoint", resumeCheckpoint);
 
     setSubmitting(true);
     try {
@@ -108,6 +112,35 @@ export default function UploadPage() {
             onChange={(e) => setDelay(e.target.value)}
           />
         </div>
+
+        <fieldset className="resume-fieldset">
+          <legend>Resume from a previous export (optional)</legend>
+          <p className="upload-hint">
+            Already have a corpus from a prior run? Upload its <code>manifest.csv</code>
+            and/or <code>checkpoint.json</code> so this scrape skips documents you already
+            have instead of re-downloading them.
+          </p>
+
+          <div className="form-row">
+            <label htmlFor="resume-manifest">manifest.csv</label>
+            <input
+              id="resume-manifest"
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => setResumeManifest(e.target.files?.[0] ?? null)}
+            />
+          </div>
+
+          <div className="form-row">
+            <label htmlFor="resume-checkpoint">checkpoint.json</label>
+            <input
+              id="resume-checkpoint"
+              type="file"
+              accept=".json,application/json"
+              onChange={(e) => setResumeCheckpoint(e.target.files?.[0] ?? null)}
+            />
+          </div>
+        </fieldset>
 
         {error && (
           <p role="alert" className="form-error">

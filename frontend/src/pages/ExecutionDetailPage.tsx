@@ -103,6 +103,12 @@ export default function ExecutionDetailPage() {
             <dd>
               {detail.csv_files_provided.length > 0 ? detail.csv_files_provided.join(", ") : "—"}
             </dd>
+            {detail.resume_seed_count !== null && (
+              <>
+                <dt>Resumed from previous export</dt>
+                <dd>Skipping {detail.resume_seed_count} previously-downloaded files</dd>
+              </>
+            )}
             {detail.error_message && (
               <>
                 <dt>Error</dt>

@@ -194,3 +194,6 @@ checkpoint.json
 downloads_santa_fe/
 checkpoint_santa_fe.json
 downloader_santa_fe.log
+
+# ---- Local-only planning docs (not meant to be tracked/shared via git) ----
+PLAN_ROSARIO_WEBAPP.md

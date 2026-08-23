@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import time
 import zipfile
 from typing import TYPE_CHECKING
@@ -14,6 +15,7 @@ from tests.api.conftest import FakeAiohttpResponse
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -121,6 +123,96 @@ class TestCreateSessionUpload:
             files={"file": ("csvs.zip", _valid_upload_zip(), "application/zip")},
         )
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+class TestCreateSessionResume:
+    def test_manifest_seed_is_written_to_checkpoint_and_reported(
+        self,
+        authenticated_client: TestClient,
+        fake_subprocess: Callable[..., list[list[str]]],
+        data_dir: Path,
+    ) -> None:
+        fake_subprocess(["done"], 0)
+        manifest_csv = (
+            b"downloaded_at,source,category,filename,source_url,dest_path\n"
+            b"t,rosario,boletines,a.pdf,http://x/a,/old/boletines/a.pdf\n"
+        )
+
+        response = authenticated_client.post(
+            "/api/sessions",
+            data={"source": "upload", "concurrency": "2", "delay": "0.2"},
+            files={
+                "file": ("csvs.zip", _valid_upload_zip(), "application/zip"),
+                "resume_manifest": ("manifest.csv", manifest_csv, "text/csv"),
+            },
+        )
+
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        session_id = response.json()["id"]
+
+        detail = authenticated_client.get(f"/api/sessions/{session_id}").json()
+        assert detail["resume_seed_count"] == 1
+
+        checkpoint_path = data_dir / "sessions" / session_id / "checkpoint.json"
+        seeded = json.loads(checkpoint_path.read_text())
+        expected_key = str(data_dir / "sessions" / session_id / "output" / "boletines" / "a.pdf")
+        assert seeded == [expected_key]
+
+    def test_checkpoint_seed_carries_skip_entries_forward(
+        self,
+        authenticated_client: TestClient,
+        fake_subprocess: Callable[..., list[list[str]]],
+        data_dir: Path,
+    ) -> None:
+        fake_subprocess(["done"], 0)
+        checkpoint_json = json.dumps(["SKIP:/old/output/decretos/missing.pdf"]).encode()
+
+        response = authenticated_client.post(
+            "/api/sessions",
+            data={"source": "upload"},
+            files={
+                "file": ("csvs.zip", _valid_upload_zip(), "application/zip"),
+                "resume_checkpoint": ("checkpoint.json", checkpoint_json, "application/json"),
+            },
+        )
+
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        session_id = response.json()["id"]
+
+        checkpoint_path = data_dir / "sessions" / session_id / "checkpoint.json"
+        seeded = json.loads(checkpoint_path.read_text())
+        expected_key = "SKIP:" + str(
+            data_dir / "sessions" / session_id / "output" / "decretos" / "missing.pdf"
+        )
+        assert seeded == [expected_key]
+
+    def test_invalid_resume_manifest_is_400(self, authenticated_client: TestClient) -> None:
+        response = authenticated_client.post(
+            "/api/sessions",
+            data={"source": "upload"},
+            files={
+                "file": ("csvs.zip", _valid_upload_zip(), "application/zip"),
+                "resume_manifest": ("manifest.csv", b"not,a,manifest\n", "text/csv"),
+            },
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_no_resume_files_leaves_seed_count_none(
+        self,
+        authenticated_client: TestClient,
+        fake_subprocess: Callable[..., list[list[str]]],
+    ) -> None:
+        fake_subprocess(["done"], 0)
+
+        response = authenticated_client.post(
+            "/api/sessions",
+            data={"source": "upload"},
+            files={"file": ("csvs.zip", _valid_upload_zip(), "application/zip")},
+        )
+
+        session_id = response.json()["id"]
+        detail = authenticated_client.get(f"/api/sessions/{session_id}").json()
+        assert detail["resume_seed_count"] is None
 
 
 class TestCreateSessionPortal:

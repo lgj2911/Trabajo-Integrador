@@ -55,6 +55,7 @@ class SessionDetail(SessionSummary):
     concurrency: int
     delay: float
     output_size_bytes: int | None
+    resume_seed_count: int | None
 
 
 class SessionListResponse(BaseModel):

@@ -22,6 +22,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, StreamingResponse
 
+from scrapper.common.checkpoint import save_checkpoint
 from scrapper_api.auth import require_auth
 from scrapper_api.dependencies import current_manager, current_settings, current_store
 from scrapper_api.models import (
@@ -34,6 +35,7 @@ from scrapper_api.models import (
     SessionStatus,
     SessionSummary,
 )
+from scrapper_api.sessions import resume_seed
 from scrapper_api.sessions.portal_fetch import PORTAL_CSV_FILES
 from scrapper_api.sessions.upload import UploadValidationError, validate_and_extract_zip
 
@@ -64,16 +66,77 @@ def _validate_and_extract_upload_to_tempdir(file: UploadFile) -> tuple[Path, lis
     return tmp_dir, extracted
 
 
+def _parse_resume_seed(
+    resume_manifest: UploadFile | None, resume_checkpoint: UploadFile | None
+) -> list[resume_seed.SeedEntry]:
+    """Parse whichever of the two optional resume-seed uploads were provided.
+
+    Returns:
+        Their combined seed entries; empty if neither file was provided.
+    """
+    entries: list[resume_seed.SeedEntry] = []
+    if resume_manifest is not None:
+        entries.extend(resume_seed.parse_manifest_seed(resume_manifest.file))
+    if resume_checkpoint is not None:
+        entries.extend(resume_seed.parse_checkpoint_seed(resume_checkpoint.file))
+    return entries
+
+
+def _write_seed_checkpoint(session_dir: Path, entries: list[resume_seed.SeedEntry]) -> None:
+    """Pre-seed a fresh session's checkpoint.json with *entries* before it ever runs.
+
+    The scrapper CLI resolves its ``--output`` argument (``Path(...).resolve()``
+    in ``scrapper/cli.py``, canonicalizing symlinks -- e.g. macOS's /tmp ->
+    /private/tmp) before computing task keys, so the seed must be built from the
+    same resolved path or its keys will never match and nothing will be skipped.
+    """
+    session_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = (session_dir / "output").resolve()
+    seed = resume_seed.build_seed_checkpoint(output_dir, entries)
+    save_checkpoint(seed, session_dir / "checkpoint.json")
+
+
+async def resolve_resume_seed(
+    resume_manifest: Annotated[UploadFile | None, File()] = None,
+    resume_checkpoint: Annotated[UploadFile | None, File()] = None,
+) -> list[resume_seed.SeedEntry]:
+    """FastAPI dependency: parse the optional resume-seed uploads for a new session.
+
+    A manifest.csv and/or checkpoint.json from a corpus already downloaded
+    elsewhere (a prior CLI/Colab run, or a previous web session's output) --
+    when given, the documents they identify get pre-seeded into the new
+    session's checkpoint.json so its scrape skips them.
+
+    Returns:
+        Combined seed entries; empty if neither file was provided.
+
+    Raises:
+        HTTPException: 400 if a provided file fails validation.
+    """
+    if resume_manifest is None and resume_checkpoint is None:
+        return []
+    try:
+        return await asyncio.to_thread(_parse_resume_seed, resume_manifest, resume_checkpoint)
+    except resume_seed.ResumeSeedValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 @router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=SessionSummary)
-async def create_session(
+async def create_session(  # noqa: PLR0913, PLR0917 -- FastAPI multipart endpoint, one Form/File per request field
     request: Request,
     source: Annotated[str, Form()],
     _username: Annotated[str, Depends(require_auth)],
+    resume_entries: Annotated[list[resume_seed.SeedEntry], Depends(resolve_resume_seed)],
     file: Annotated[UploadFile | None, File()] = None,
     concurrency: Annotated[int, Form()] = 5,
     delay: Annotated[float, Form()] = 0.5,
 ) -> SessionSummary:
     """Validate the request, persist a new queued session, and enqueue it for execution.
+
+    *resume_entries* (see ``resolve_resume_seed``) are optional: documents
+    identified by an uploaded manifest.csv and/or checkpoint.json from a
+    corpus already downloaded elsewhere, pre-seeded into this session's
+    checkpoint.json so its scrape skips them instead of re-downloading.
 
     Returns:
         The freshly created session's summary.
@@ -112,14 +175,28 @@ async def create_session(
     else:
         csv_files = list(PORTAL_CSV_FILES.keys())
 
-    detail = await store.create(
-        source=validated_source, concurrency=concurrency, delay=delay, csv_files=csv_files
+    resume_seed_count = (
+        len({(entry.category, entry.filename) for entry in resume_entries})
+        if resume_entries
+        else None
     )
 
+    detail = await store.create(
+        source=validated_source,
+        concurrency=concurrency,
+        delay=delay,
+        csv_files=csv_files,
+        resume_seed_count=resume_seed_count,
+    )
+
+    session_dir = settings.sessions_dir / detail.id
     if tmp_dir is not None:
-        csv_input_dir = settings.sessions_dir / detail.id / "csv_input"
+        csv_input_dir = session_dir / "csv_input"
         csv_input_dir.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(shutil.move, str(tmp_dir), str(csv_input_dir))
+
+    if resume_entries:
+        await asyncio.to_thread(_write_seed_checkpoint, session_dir, resume_entries)
 
     await manager.enqueue(detail.id)
     return SessionSummary(**detail.model_dump())

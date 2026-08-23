@@ -43,11 +43,16 @@ overview; that file is the walkthrough.
 
 | Resource | Tier / SKU | Purpose |
 |---|---|---|
-| Azure Static Web Apps | Free | Hosts the built React frontend |
+| Storage Account (static website) | Standard_LRS | Hosts the built React frontend via Blob `$web` static-site hosting |
 | Azure Container Apps (environment + app) | Consumption, **max 1 replica** (hard requirement — see below) | Runs the FastAPI backend container |
 | Azure Container Registry | Basic | Stores the backend's Docker image |
 | Storage Account + Azure Files share | Standard_LRS | Persistent `/data` volume (SQLite DB + per-session output/logs) mounted into the Container App |
 | Log Analytics workspace | PerGB2018, 30-day retention | Required by the Container Apps environment |
+
+Frontend hosting deliberately does not use Azure Static Web Apps: its Free
+tier only exists in 5 regions, and some subscription types (e.g. Azure for
+Students) restrict deployments to a region allowlist that may not include any
+of them. A plain Storage account works in any region.
 
 **Why max 1 replica:** the backend keeps its scrape job queue and session
 state in that one process's memory (not in an external store). Running more
@@ -65,10 +70,10 @@ first-class Container Apps volume type.
 
 | Resource | Estimated monthly cost |
 |---|---|
-| Static Web Apps (Free) | $0 |
+| Storage Account (static website, frontend) | <$1 |
 | Container Apps (Consumption, scale-to-zero, low traffic) | ~$0–5 |
 | Container Registry (Basic) | ~$5 (flat) |
-| Storage Account + Files share (few GB) | <$1 |
+| Storage Account + Files share (`/data` volume, few GB) | <$1 |
 | Log Analytics (low volume) | ~$0–2 |
 | **Total** | **~$5–10/month** |
 
@@ -88,9 +93,13 @@ az deployment group create --resource-group rg-scrapper-dev \
 ./scripts/set-secrets.sh rg-scrapper-dev dev "<bcrypt-hash-of-your-password>"
 ```
 
-Then build/deploy the frontend against the Container App's URL — full details,
-including how to get that URL and the Static Web App deployment token, are in
-[`infra/azure/README.md`](infra/azure/README.md).
+(If the deployment fails with `RequestDisallowedByAzure`, your subscription
+restricts which region you can deploy to — see
+[`infra/azure/README.md`](infra/azure/README.md#troubleshooting-requestdisallowedbyazure).)
+
+Then build/deploy the frontend against the Container App's URL — full
+details, including how to get that URL and upload `frontend/dist` to the
+static website, are in [`infra/azure/README.md`](infra/azure/README.md).
 
 ---
 

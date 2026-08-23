@@ -1,6 +1,6 @@
 ---
 name: scrapper-azure-deploy
-description: Provision, redeploy, and troubleshoot the Azure hosting (Static Web Apps + Container Apps + Storage) for the Rosario scraper web app, in infra/azure/.
+description: Provision, redeploy, and troubleshoot the Azure hosting (Storage static website + Container Apps + Storage) for the Rosario scraper web app, in infra/azure/.
 ---
 
 # Scrapper Azure deployment
@@ -28,12 +28,16 @@ that's a real architecture change, not a config tweak.
 
 ## Resources (see `infra/azure/README.md` for the full table + cost estimate)
 
-Static Web Apps (Free, frontend) · Container Apps Environment + App
-(Consumption, max 1 replica, backend) · Container Registry (Basic) · Storage
-Account + **Azure Files** share (not Blob — needed for POSIX-ish semantics a
-live SQLite file + append-mode logs require; Blob/blobfuse's weaker
-locking/consistency is risky here) · Log Analytics workspace (required by the
-Container Apps environment).
+Storage Account serving the frontend via Blob static-website hosting (not
+Azure Static Web Apps — its Free tier only exists in 5 regions, and some
+subscription types, e.g. Azure for Students, restrict deployments to a region
+allowlist that may not include any of them; a plain Storage account works
+anywhere) · Container Apps Environment + App (Consumption, max 1 replica,
+backend) · Container Registry (Basic) · a *second* Storage Account +
+**Azure Files** share for `/data` (not Blob here — needed for POSIX-ish
+semantics a live SQLite file + append-mode logs require; Blob/blobfuse's
+weaker locking/consistency is risky for that) · Log Analytics workspace
+(required by the Container Apps environment).
 
 Target cost: **~$5–10/month**, meant to run for many months against a ~$100
 one-time credit. **Check actual spend in Azure Cost Management after every
@@ -57,7 +61,9 @@ accidentally rotate or wipe credentials.
   (rebuilds the image via `az acr build`, updates the Container App; does not
   touch secrets or the frontend).
 - **Frontend-only redeploy**: rebuild (`npm run build` with
-  `VITE_API_BASE_URL` pointed at the Container App's FQDN) and `swa deploy`.
+  `VITE_API_BASE_URL` pointed at the Container App's FQDN) and
+  `az storage blob upload-batch -s ./dist -d '$web' --overwrite` against the
+  static-website Storage Account (see the README's step 5).
 - **Infra changes** (editing a `.bicep` file): re-run the `az deployment group
   create` command — it's idempotent.
 

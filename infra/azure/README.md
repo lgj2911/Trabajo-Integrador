@@ -10,11 +10,19 @@ CI deploys either (see `.github/workflows/ci.yml`).
 | Resource | Tier / SKU | Purpose |
 |---|---|---|
 | Resource Group | — | Container for everything below (created manually, once, per environment) |
-| Azure Static Web Apps | **Free** | Hosts the built React frontend (`frontend/dist`) |
+| Storage Account (static website / `$web` blob container) | **Standard_LRS** | Hosts the built React frontend (`frontend/dist`) |
 | Azure Container Apps (environment + app) | **Consumption**, scale 0-1 | Runs the FastAPI backend container |
 | Azure Container Registry | **Basic** | Stores the backend's Docker image |
 | Storage Account + Azure Files share | **Standard_LRS** | Persistent `/data` volume (SQLite DB + per-session scrape logs/output) mounted into the Container App |
 | Log Analytics workspace | **PerGB2018**, 30-day retention | Required by the Container Apps environment for logs |
+
+**Why a Storage static website and not Azure Static Web Apps:** SWA's Free
+tier only exists in 5 regions (`eastus2`, `centralus`, `westus2`,
+`westeurope`, `eastasia`). Some subscription types (e.g. Azure for Students)
+restrict deployments to a subscription-specific region allowlist that may not
+intersect with that list at all — see the Troubleshooting section below. A
+plain Storage account works in any region, so this sidesteps the constraint
+entirely, and drops the separate SWA CLI dependency.
 
 **Hard requirement — max replicas is 1.** The backend keeps in-process
 job-queue state and session-manager state in memory (see `src/scrapper_api`).
@@ -38,10 +46,10 @@ instead.
 
 | Resource | Estimated monthly cost |
 |---|---|
-| Static Web Apps (Free) | $0 |
+| Storage Account (static website, frontend) | <$1 |
 | Container Apps (Consumption, scale-to-zero, low traffic) | ~$0-5 |
 | Container Registry (Basic) | ~$5 (flat) |
-| Storage Account + Files share (few GB) | <$1 |
+| Storage Account + Files share (`/data` volume, few GB) | <$1 |
 | Log Analytics (PerGB2018, 30-day retention, low volume) | ~$0-2 |
 | **Total** | **~$5-10/month** |
 
@@ -58,8 +66,8 @@ compute if traffic/usage patterns turn out heavier than expected.
 - The Bicep CLI extension (az will offer to install it automatically the first
   time you run a command that needs it; or install explicitly: `az bicep install`)
 - An Azure subscription with the credit/budget applied
-- Node.js (for building the frontend) and the SWA CLI (`npm install -g @azure/static-web-apps-cli`)
-  for the frontend deploy step
+- Node.js + npm (to `npm run build` the frontend in step 5 — no separate CLI
+  tool needed to deploy it, unlike Azure Static Web Apps' `swa` CLI)
 
 ## Step-by-step: provisioning from zero
 
@@ -70,17 +78,22 @@ All commands below assume you're in `infra/azure/` unless noted otherwise.
 ```bash
 export ENVIRONMENT_NAME=dev        # or "prod"
 export RESOURCE_GROUP=rg-scrapper-$ENVIRONMENT_NAME
-export LOCATION=eastus2
+export LOCATION=eastus2            # see Troubleshooting below if your subscription rejects this
 
 az group create --name "$RESOURCE_GROUP" --location "$LOCATION"
 ```
 
+Note: the resource group's own location here is mostly nominal — what matters
+is the `location` param in `parameters/<env>.bicepparam` (step 2), which drives
+every actual resource. They don't need to match.
+
 ### 2. Deploy the infrastructure (Bicep)
 
-This creates the Static Web App, Container Apps environment + app (with a
-placeholder image — nothing meaningful is running yet), Container Registry,
-Storage Account + Files share, and Log Analytics workspace, all wired
-together. Secrets are left empty at this point (see step 4).
+This creates the static-website Storage Account, Container Apps environment +
+app (pointed at a public placeholder image — nothing meaningful is running
+yet), Container Registry, `/data` Storage Account + Files share, and Log
+Analytics workspace, all wired together. Secrets are left empty at this point
+(see step 4).
 
 ```bash
 az deployment group create \
@@ -98,8 +111,8 @@ az deployment group show \
   --query properties.outputs
 ```
 
-You'll want `acrLoginServer`, `containerAppFqdn`, and `staticWebAppHostname`
-from here.
+You'll want `acrLoginServer`, `containerAppFqdn`, `frontendUrl`, and
+`staticWebsiteAccountName` from here.
 
 ### 3. Build and push the backend image, deploy it
 
@@ -150,30 +163,65 @@ npm ci
 npm run build
 ```
 
-Get the Static Web App's deployment token and deploy `frontend/dist` with the
-SWA CLI:
+Enable static-website mode on the Storage Account (idempotent — safe to
+re-run) and upload the build to its `$web` container:
 
 ```bash
-SWA_NAME=$(az staticwebapp list \
+STATIC_SITE_ACCOUNT=$(az deployment group show \
   --resource-group "$RESOURCE_GROUP" \
-  --query "[0].name" -o tsv)
+  --name main \
+  --query "properties.outputs.staticWebsiteAccountName.value" -o tsv)
 
-SWA_TOKEN=$(az staticwebapp secrets list \
-  --name "$SWA_NAME" \
+STATIC_SITE_KEY=$(az storage account keys list \
+  --account-name "$STATIC_SITE_ACCOUNT" \
   --resource-group "$RESOURCE_GROUP" \
-  --query "properties.apiKey" -o tsv)
+  --query "[0].value" -o tsv)
 
-swa deploy ./dist --deployment-token "$SWA_TOKEN" --env production
+az storage blob service-properties update \
+  --account-name "$STATIC_SITE_ACCOUNT" --account-key "$STATIC_SITE_KEY" \
+  --static-website --index-document index.html --404-document index.html
+
+az storage blob upload-batch \
+  --account-name "$STATIC_SITE_ACCOUNT" --account-key "$STATIC_SITE_KEY" \
+  -s ./dist -d '$web' --overwrite
 ```
+
+(Account-key auth, matching this infra's existing pragmatic style — see the
+Container Registry admin-user note below — rather than wiring up an RBAC role
+assignment for a single-operator hobby deployment.)
 
 ### 6. Verify CORS
 
-The Container App's `CORS_ORIGINS` env var is set by Bicep to
-`https://<static-web-app-hostname>` automatically (main.bicep wires the SWA
-module's output straight into the container-app module). If you later add a
-custom domain to the Static Web App, redeploy Bicep with that domain included
-— `CORS_ORIGINS` accepts a comma-separated list; you'll need to extend
-`main.bicep`'s `corsOrigins` expression to include it.
+The Container App's `CORS_ORIGINS` env var is set by Bicep to the static
+website's URL automatically (`main.bicep` wires the `staticWebsite` module's
+`webEndpoint` output straight into the `container-app` module). If you later
+add a custom domain in front of the static website, redeploy Bicep with that
+domain included — `CORS_ORIGINS` accepts a comma-separated list; you'll need
+to extend `main.bicep`'s `corsOrigins` expression to include it.
+
+## Troubleshooting: `RequestDisallowedByAzure`
+
+If `az deployment group create` fails with every resource reporting
+`"RequestDisallowedByAzure"` / *"This policy maintains a set of best
+available regions where your subscription can deploy resources"*, your
+subscription type restricts deployments to a subscription-specific region
+allowlist — this is common on **Azure for Students** and similar restricted
+subscriptions, and `eastus2` is a frequent example of a region *not* on that
+list even though it's a normal default elsewhere. There's no fixed public
+list of which regions are allowed; to find one that works for your
+subscription:
+
+- Check `az group list -o table` / `az resource list -o table` for a region
+  where you already have real (non-empty) resource groups successfully
+  deployed — that region is confirmed allowed.
+- Or probe candidate regions without actually provisioning anything, via
+  `az deployment group validate` (same arguments as `create`, but read-only):
+  a candidate that returns no `RequestDisallowedByAzure` errors is safe to use
+  in `parameters/<env>.bicepparam`'s `location`.
+
+Once you've found an allowed region, set it as `location` in
+`parameters/<env>.bicepparam` — it drives every resource in this template
+uniformly.
 
 ## Redeploying after code changes
 
@@ -194,7 +242,20 @@ custom domain to the Static Web App, redeploy Bicep with that domain included
 - `webappPasswordHash` and `sessionSecret` default to empty strings in both
   `main.bicep` and the `parameters/*.bicepparam` files. **Do not put real
   secret values in a `.bicepparam` file** — they're checked into git. Always
-  set them via `scripts/set-secrets.sh`.
+  set them via `scripts/set-secrets.sh`. Azure Container Apps rejects a secret
+  entry with an empty value, so while these are unset,
+  `modules/container-app.bicep` wires `WEBAPP_PASSWORD_HASH`/`SESSION_SECRET`
+  as plain empty-string env vars instead of `secretRef`s (harmless —
+  `src/scrapper_api/auth.py` already treats an empty hash as "no password
+  configured, all logins fail"); `set-secrets.sh` both sets the real values
+  and rewires the env vars to `secretref:` once you run it.
+- The Container App's image on a from-zero deploy (step 2, before step 3 has
+  ever pushed anything to the ACR) points at Microsoft's public
+  `mcr.microsoft.com/k8se/quickstart:latest` placeholder rather than
+  `scrapper-api:latest` — the freshly created ACR is empty, so that tag
+  doesn't exist yet. `containerImageTag == 'latest'` is the sentinel for
+  "no real image has been pushed"; `scripts/deploy.sh` always overrides it
+  with a concrete git-SHA tag once it has actually built and pushed one.
 - The Dockerfile has been built and run end-to-end against the finalized
   `src/scrapper_api` package (`docker build` succeeds, the container boots
   `uvicorn`, serves `/docs`/`/openapi.json`, and `weasyprint` imports

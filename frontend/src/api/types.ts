@@ -20,6 +20,7 @@ export interface SessionDetail extends SessionSummary {
   concurrency: number;
   delay: number;
   output_size_bytes: number | null;
+  resume_seed_count: number | null;
 }
 
 export interface FileEntry {

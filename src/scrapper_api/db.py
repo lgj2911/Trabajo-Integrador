@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     csv_files_json TEXT NOT NULL,
     error_message TEXT,
     pid INTEGER,
-    ok_count INTEGER NOT NULL DEFAULT 0
+    ok_count INTEGER NOT NULL DEFAULT 0,
+    resume_seed_count INTEGER
 )
 """
 

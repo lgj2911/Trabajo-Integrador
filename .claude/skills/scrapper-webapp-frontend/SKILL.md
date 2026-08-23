@@ -19,7 +19,7 @@ npm install
 npm run dev          # dev server on :5173, expects VITE_API_BASE_URL (see .env.example)
 npm run lint         # eslint
 npm test             # vitest
-npm run build        # production build -> frontend/dist (what Static Web Apps serves)
+npm run build        # production build -> frontend/dist (what the static website serves)
 ```
 
 By default `VITE_API_BASE_URL=http://localhost:8000`, matching the backend's default
@@ -49,8 +49,8 @@ two default configs are meant to work together out of the box for local dev.
 ## SSE and cross-origin cookies
 
 `LogViewer` consumes `EventSource`, which does **not** send cookies cross-origin by
-default. In production, frontend (Static Web Apps) and backend (Container Apps) are
-different origins, so the `EventSource` must be constructed with
+default. In production, frontend (Storage static website) and backend (Container
+Apps) are different origins, so the `EventSource` must be constructed with
 `{ withCredentials: true }` or the log stream will silently 401/fail auth. This is
 easy to miss locally since same-origin-adjacent `localhost` setups can mask it —
 always re-check this if the log viewer stops working after a deploy.

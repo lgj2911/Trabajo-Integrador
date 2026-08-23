@@ -13,9 +13,15 @@
 # - [session-secret]: a long random string used to sign session cookies. If
 #   omitted, a fresh one is generated with `openssl rand -hex 32`.
 #
-# Container Apps in single-revision mode does not automatically start a new
-# revision just because a secret value changed, so this script restarts the
-# latest revision at the end to make sure the new values actually take effect.
+# On initial provisioning (empty webappPasswordHash/sessionSecret in the
+# .bicepparam file), main.bicep's container-app module leaves WEBAPP_PASSWORD_HASH
+# and SESSION_SECRET wired as plain empty-string env vars, not secretRefs -- Azure
+# Container Apps rejects an empty-string secret value, so nothing can be declared
+# there yet. This script both sets the secret values AND rewires the env vars to
+# pull from them via `--set-env-vars ...=secretref:...`; that rewire is itself a
+# template change, which reliably creates a new revision in single-revision mode
+# (a secret value change alone would not), so the app always ends up running with
+# the values just set -- no separate manual restart needed, on first run or rotate.
 
 set -euo pipefail
 
@@ -34,15 +40,13 @@ az containerapp secret set \
     "webapp-password-hash=${WEBAPP_PASSWORD_HASH}" \
     "session-secret=${SESSION_SECRET}"
 
-echo "==> Restarting the latest revision so it picks up the new secret values"
-LATEST_REVISION="$(az containerapp revision list \
+echo "==> Wiring WEBAPP_PASSWORD_HASH/SESSION_SECRET to pull from those secrets (triggers a new revision)"
+az containerapp update \
   --name "$CONTAINER_APP_NAME" \
   --resource-group "$RESOURCE_GROUP" \
-  --query "sort_by([], &properties.createdTime)[-1].name" -o tsv)"
+  --set-env-vars \
+    "WEBAPP_PASSWORD_HASH=secretref:webapp-password-hash" \
+    "SESSION_SECRET=secretref:session-secret" \
+  >/dev/null
 
-az containerapp revision restart \
-  --name "$CONTAINER_APP_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --revision "$LATEST_REVISION"
-
-echo "==> Done. Secrets are set; the app has been restarted to pick them up."
+echo "==> Done. Secrets are set and the running revision picks them up."

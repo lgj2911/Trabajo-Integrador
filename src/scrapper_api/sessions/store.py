@@ -98,6 +98,7 @@ class SessionStore:
             concurrency=row["concurrency"],
             delay=row["delay"],
             output_size_bytes=output_size,
+            resume_seed_count=row["resume_seed_count"],
         )
 
     async def create(
@@ -107,6 +108,7 @@ class SessionStore:
         concurrency: int,
         delay: float,
         csv_files: list[str],
+        resume_seed_count: int | None = None,
     ) -> SessionDetail:
         """Insert a new ``queued`` session and return its detail view.
 
@@ -124,8 +126,9 @@ class SessionStore:
                 """
                 INSERT INTO sessions (
                     id, status, source, created_at, started_at, finished_at,
-                    concurrency, delay, csv_files_json, error_message, pid, ok_count
-                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, 0)
+                    concurrency, delay, csv_files_json, error_message, pid, ok_count,
+                    resume_seed_count
+                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, 0, ?)
                 """,
                 (
                     session_id,
@@ -135,6 +138,7 @@ class SessionStore:
                     concurrency,
                     delay,
                     json.dumps(csv_files),
+                    resume_seed_count,
                 ),
             )
             await conn.commit()

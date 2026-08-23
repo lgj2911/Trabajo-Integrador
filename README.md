@@ -46,7 +46,7 @@ executions and their logs, and download a ZIP of what was scraped.
   `uv run poe api` (serves on `http://localhost:8000`, interactive docs at `/docs`).
 - **Frontend** — `frontend/` (React + Vite + TypeScript). Run locally with
   `cd frontend && npm install && npm run dev` (serves on `http://localhost:5173`).
-- **Hosting** — Azure (Static Web Apps + Container Apps + Storage); see
+- **Hosting** — Azure (Storage static website + Container Apps + Storage); see
   [`DEPLOY.md`](DEPLOY.md) and [`infra/azure/README.md`](infra/azure/README.md).
 - Scope: **Rosario only**. Santa Fe stays CLI/Colab-only (see below) — the web app
   does not cover it.
