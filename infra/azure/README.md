@@ -136,10 +136,17 @@ the current short git SHA.)
 
 ### 4. Set the runtime secrets (one-time, then rotate as needed)
 
-Generate a bcrypt hash for the operator password:
+Generate a bcrypt hash for the operator password — typed at a prompt, not
+passed as a command-line argument, so it's immune to shell quoting entirely
+(no risk of a `$`, backtick, or `"` in your password getting silently
+mangled by bash the way `$2b$12$...` hashes can be — see the warning below):
 
 ```bash
-uv run python -c "from passlib.hash import bcrypt; print(bcrypt.hash('choose-a-strong-password'))"
+uv run python -c "
+from getpass import getpass
+from passlib.hash import bcrypt
+print(bcrypt.hash(getpass('Password: ')))
+"
 ```
 
 Then set the secrets — kept as a separate script from `deploy.sh` on purpose,
