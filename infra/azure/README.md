@@ -143,10 +143,17 @@ uv run python -c "from passlib.hash import bcrypt; print(bcrypt.hash('choose-a-s
 ```
 
 Then set the secrets — kept as a separate script from `deploy.sh` on purpose,
-so routine redeploys never touch them:
+so routine redeploys never touch them. **Use single quotes around the hash,
+not double quotes**: a bcrypt hash looks like `$2b$12$...`, and inside double
+quotes bash tries to expand `$2`/`$1` etc. as positional parameters, silently
+mangling the hash down to whatever literal text follows the last one (e.g.
+`$2b$12$4zWT...` becomes just `b`) — the app then fails every login attempt
+with a 500 (`passlib.exc.UnknownHashError`), not just wrong passwords, since
+the stored value isn't a valid hash at all. Single quotes disable all shell
+expansion, so this can't happen:
 
 ```bash
-./scripts/set-secrets.sh "$RESOURCE_GROUP" "$ENVIRONMENT_NAME" "<bcrypt-hash-from-above>"
+./scripts/set-secrets.sh "$RESOURCE_GROUP" "$ENVIRONMENT_NAME" '<bcrypt-hash-from-above>'
 ```
 
 (A `SESSION_SECRET` is auto-generated with `openssl rand -hex 32` if you don't

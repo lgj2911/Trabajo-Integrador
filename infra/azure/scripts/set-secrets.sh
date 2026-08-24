@@ -30,6 +30,25 @@ ENVIRONMENT_NAME="${2:?Usage: set-secrets.sh <resource-group> <environment-name>
 WEBAPP_PASSWORD_HASH="${3:?Usage: set-secrets.sh <resource-group> <environment-name> <webapp-password-hash> [session-secret]}"
 SESSION_SECRET="${4:-$(openssl rand -hex 32)}"
 
+# A bcrypt hash always looks like $2a$/$2b$/$2y$<cost>$<53 base64 chars>, 60
+# characters total. If this doesn't match, the most likely cause is passing the
+# hash in double quotes on the command line -- bash expands $2b/$1 etc. as
+# positional parameters inside double quotes, silently mangling the hash (e.g.
+# down to a single stray character) rather than erroring, and every login then
+# fails with a 500 (UnknownHashError), not a clean "wrong password". Use single
+# quotes around the hash argument instead.
+# (Glob match + explicit length check, not `=~` with a `{n}` interval: macOS's
+# system /bin/bash is still 3.2, whose regex engine doesn't reliably support
+# bounded repetition in `[[ ... =~ ... ]]`.)
+if [[ "$WEBAPP_PASSWORD_HASH" != \$2[aby]\$[0-9][0-9]\$* ]] || [[ ${#WEBAPP_PASSWORD_HASH} -ne 60 ]]; then
+  echo "error: '<webapp-password-hash>' doesn't look like a valid bcrypt hash." >&2
+  echo "       Got: $WEBAPP_PASSWORD_HASH" >&2
+  echo "       Did you wrap it in double quotes? Use single quotes instead --" >&2
+  echo "       bash expands \$2b/\$1/etc. inside double quotes and silently" >&2
+  echo "       mangles the hash. Re-run with: ... '<bcrypt-hash>'" >&2
+  exit 1
+fi
+
 CONTAINER_APP_NAME="scrapper-${ENVIRONMENT_NAME}-api"
 
 echo "==> Setting secrets on $CONTAINER_APP_NAME"
