@@ -39,7 +39,11 @@ two default configs are meant to work together out of the box for local dev.
   session history + live view. The list page polls (`setInterval`) only while a
   session is `queued`/`running` — it's a list, not a stream, so plain polling is
   the right tool there. The detail page opens a real `EventSource` against
-  `/api/sessions/{id}/logs` for the live log tail.
+  `/api/sessions/{id}/logs` for the live log tail, and shows a **Stop** button
+  while the session is non-terminal (`POST /api/sessions/{id}/cancel`) —
+  `TERMINAL_STATUSES` there must include every terminal `SessionStatus` value
+  (`cancelled` included), or Stop/Download's enabled state and the poll-forever
+  guard both silently go wrong for that status.
 - **Files** (`pages/FilesPage.tsx`) — a filterable table backed by `GET /api/files`
   (aggregated across all sessions' `manifest.csv` files on the backend). The 10
   known categories for the filter dropdown live in `api/types.ts` as

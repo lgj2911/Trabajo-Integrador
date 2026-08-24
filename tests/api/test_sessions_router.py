@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    import pytest
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -264,6 +265,74 @@ class TestListAndGetSessions:
         assert response.status_code == status.HTTP_200_OK
         for item in response.json()["items"]:
             assert item["status"] == "completed"
+
+
+class _BlockingFakeProcess:
+    """A fake process whose wait() blocks until terminate() is called."""
+
+    def __init__(self, pid: int = 4242) -> None:
+        self.pid = pid
+        self.stdout = None
+        self.terminated = False
+        self._exit_event = asyncio.Event()
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self._exit_event.set()
+
+    async def wait(self) -> int:
+        await self._exit_event.wait()
+        return -15
+
+
+class TestCancelSession:
+    def test_cancel_unknown_session_is_404(self, authenticated_client: TestClient) -> None:
+        response = authenticated_client.post("/api/sessions/does-not-exist/cancel")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_cancel_already_completed_session_is_409(
+        self, authenticated_client: TestClient, fake_subprocess: Callable[..., list[list[str]]]
+    ) -> None:
+        fake_subprocess(["done"], 0)
+        create_response = authenticated_client.post(
+            "/api/sessions",
+            data={"source": "upload"},
+            files={"file": ("csvs.zip", _valid_upload_zip(), "application/zip")},
+        )
+        session_id = create_response.json()["id"]
+        _wait_for_status(authenticated_client, session_id, "completed")
+
+        response = authenticated_client.post(f"/api/sessions/{session_id}/cancel")
+        assert response.status_code == status.HTTP_409_CONFLICT
+
+    def test_cancel_running_session_terminates_it_and_marks_cancelled(
+        self,
+        authenticated_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        process = _BlockingFakeProcess()
+
+        async def fake_create_subprocess_exec(  # noqa: RUF029
+            *_args: object, **_kwargs: object
+        ) -> _BlockingFakeProcess:
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+        create_response = authenticated_client.post(
+            "/api/sessions",
+            data={"source": "upload"},
+            files={"file": ("csvs.zip", _valid_upload_zip(), "application/zip")},
+        )
+        session_id = create_response.json()["id"]
+        _wait_for_status(authenticated_client, session_id, "running")
+
+        cancel_response = authenticated_client.post(f"/api/sessions/{session_id}/cancel")
+        assert cancel_response.status_code == status.HTTP_200_OK
+        assert process.terminated
+
+        final = _wait_for_status(authenticated_client, session_id, "cancelled")
+        assert final["error_message"] == "Cancelled by operator"
 
 
 class TestSessionLogsAndDownload:

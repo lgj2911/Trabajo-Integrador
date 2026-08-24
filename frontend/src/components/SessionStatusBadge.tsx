@@ -6,6 +6,7 @@ const LABELS: Record<SessionStatus, string> = {
   completed: "Completed",
   failed: "Failed",
   interrupted: "Interrupted",
+  cancelled: "Cancelled",
 };
 
 export function SessionStatusBadge({ status }: { status: SessionStatus }) {

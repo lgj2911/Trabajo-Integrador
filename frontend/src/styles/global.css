@@ -442,3 +442,8 @@ a {
   background: #fff4e0;
   color: #9a6400;
 }
+
+.status-badge--cancelled {
+  background: #f1f0f5;
+  color: #5b5568;
+}

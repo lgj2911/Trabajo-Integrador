@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { apiClient } from "../api/client";
+import { apiClient, ApiError } from "../api/client";
 import type { SessionDetail } from "../api/types";
 import { SessionStatusBadge } from "../components/SessionStatusBadge";
 import { LogViewer } from "../components/LogViewer";
 
-const TERMINAL_STATUSES: SessionDetail["status"][] = ["completed", "failed", "interrupted"];
+const TERMINAL_STATUSES: SessionDetail["status"][] = [
+  "completed",
+  "failed",
+  "interrupted",
+  "cancelled",
+];
 const POLL_INTERVAL_MS = 5000;
 
 export default function ExecutionDetailPage() {
@@ -14,6 +19,8 @@ export default function ExecutionDetailPage() {
   const [notFound, setNotFound] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -35,6 +42,20 @@ export default function ExecutionDetailPage() {
     const timer = setInterval(load, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [detail, load]);
+
+  async function handleCancel() {
+    if (!id) return;
+    setCancelError(null);
+    setCancelling(true);
+    try {
+      const updated = await apiClient.post<SessionDetail>(`/api/sessions/${id}/cancel`);
+      setDetail(updated);
+    } catch (err) {
+      setCancelError(err instanceof ApiError ? err.detail ?? err.message : "Failed to stop the session.");
+    } finally {
+      setCancelling(false);
+    }
+  }
 
   async function handleDownload() {
     if (!id) return;
@@ -118,11 +139,30 @@ export default function ExecutionDetailPage() {
           </dl>
 
           <div className="actions-row">
+            {!isTerminal && (
+              <button type="button" onClick={handleCancel} disabled={cancelling}>
+                {cancelling ? "Stopping…" : "Stop"}
+              </button>
+            )}
             <button type="button" onClick={handleDownload} disabled={!isTerminal || downloading}>
               {downloading ? "Preparing download…" : "Download results"}
             </button>
             <Link to={`/files?session_id=${id}`}>View files for this session</Link>
           </div>
+
+          {!isTerminal && (
+            <p className="upload-hint">
+              Stopping sends a shutdown signal to the running scrape; the last checkpoint
+              (saved roughly every 50 downloads) is kept, and any documents already saved stay
+              in this session's output — nothing is lost, just no longer growing.
+            </p>
+          )}
+
+          {cancelError && (
+            <p role="alert" className="form-error">
+              {cancelError}
+            </p>
+          )}
 
           {downloadError && (
             <p role="alert" className="form-error">

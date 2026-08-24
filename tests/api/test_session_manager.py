@@ -96,6 +96,141 @@ class TestSessionManagerLifecycle:
         asyncio.run(scenario())
 
 
+class _BlockingFakeProcess:
+    """A fake process whose wait() blocks until released (terminate() or finish())."""
+
+    def __init__(self, pid: int = 4242) -> None:
+        self.pid = pid
+        self.stdout = None
+        self.terminated = False
+        self._exit_event = asyncio.Event()
+        self._returncode = 0
+
+    def terminate(self) -> None:
+        """Simulate SIGTERM: unblocks wait() with a signal-killed return code."""
+        self.terminated = True
+        self._returncode = -15
+        self._exit_event.set()
+
+    def finish(self, returncode: int = 0) -> None:
+        """Let a still-blocked wait() resolve, as if the process exited on its own."""
+        self._returncode = returncode
+        self._exit_event.set()
+
+    async def wait(self) -> int:
+        await self._exit_event.wait()
+        return self._returncode
+
+
+async def _wait_for_status(
+    store: SessionStore, session_id: str, status: SessionStatus, timeout: float = 5.0
+) -> None:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while True:
+        detail = await store.get(session_id)
+        assert detail is not None
+        if detail.status == status:
+            return
+        if loop.time() > deadline:
+            msg = f"session {session_id} never reached status {status!r} (last: {detail.status!r})"
+            raise AssertionError(msg)
+        await asyncio.sleep(0.01)
+
+
+class TestSessionManagerCancel:
+    def test_cancel_running_session_terminates_process_and_marks_cancelled(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        process = _BlockingFakeProcess()
+
+        # Must stay `async def`: it replaces asyncio.create_subprocess_exec, whose
+        # callers always `await` it.
+        async def fake_create_subprocess_exec(  # noqa: RUF029
+            *_args: object, **_kwargs: object
+        ) -> _BlockingFakeProcess:
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+        async def scenario() -> None:
+            store = SessionStore(settings.db_path, settings.sessions_dir)
+            await store.init()
+            manager = SessionManager(store, settings)
+            detail = await store.create(
+                source="upload", concurrency=1, delay=0.1, csv_files=["boletines.csv"]
+            )
+            manager.start()
+            await manager.enqueue(detail.id)
+            await _wait_for_status(store, detail.id, SessionStatus.running)
+
+            await manager.cancel(detail.id)
+            assert process.terminated
+
+            final = await wait_for_terminal_status(store, detail.id)
+            assert final.status == SessionStatus.cancelled
+            assert final.error_message == "Cancelled by operator"
+            assert final.finished_at is not None
+
+            await manager.stop()
+
+        asyncio.run(scenario())
+
+    def test_cancel_queued_session_is_skipped_without_ever_spawning_a_process(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        processes: list[_BlockingFakeProcess] = []
+
+        # Must stay `async def`: it replaces asyncio.create_subprocess_exec, whose
+        # callers always `await` it.
+        async def fake_create_subprocess_exec(  # noqa: RUF029
+            *_args: object, **_kwargs: object
+        ) -> _BlockingFakeProcess:
+            process = _BlockingFakeProcess()
+            processes.append(process)
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+        async def scenario() -> None:
+            store = SessionStore(settings.db_path, settings.sessions_dir)
+            await store.init()
+            manager = SessionManager(store, settings)
+
+            first = await store.create(
+                source="upload", concurrency=1, delay=0.1, csv_files=["boletines.csv"]
+            )
+            second = await store.create(
+                source="upload", concurrency=1, delay=0.1, csv_files=["boletines.csv"]
+            )
+
+            manager.start()
+            await manager.enqueue(first.id)
+            await _wait_for_status(store, first.id, SessionStatus.running)
+            await manager.enqueue(second.id)
+
+            await manager.cancel(second.id)
+            cancelled = await store.get(second.id)
+            assert cancelled is not None
+            assert cancelled.status == SessionStatus.cancelled
+            assert cancelled.error_message == "Cancelled before it started running"
+            assert cancelled.finished_at is not None
+            still_running = await store.get(first.id)
+            assert still_running is not None
+            assert still_running.status == SessionStatus.running
+
+            # Let `first` finish on its own; the worker then dequeues `second`,
+            # sees it's no longer `queued`, and must skip it entirely.
+            processes[0].finish(0)
+            await wait_for_terminal_status(store, first.id)
+            await asyncio.sleep(0.05)
+
+            await manager.stop()
+
+        asyncio.run(scenario())
+        assert len(processes) == 1  # a process was only ever spawned for `first`
+
+
 class _TrackingFakeProcess:
     """A fake process that stays "active" (per the test's counter) until wait() resolves."""
 

@@ -60,6 +60,20 @@ directly. **Do not "optimize" this into an in-process call.**
   (status, timestamps, counts, error messages).
 - On FastAPI startup, any session stuck `running` whose PID is dead gets reconciled
   to `interrupted` (`sessions/store.py`'s reconciliation query + `os.kill(pid, 0)`).
+- **Cancelling** (`POST /api/sessions/{id}/cancel`, `SessionManager.cancel`): if the
+  session is the one currently occupying the worker, sends SIGTERM
+  (`process.terminate()`) and sets a `_cancel_requested` flag that
+  `_run_cli_subprocess` checks *after* `process.wait()` returns, to record
+  `cancelled` instead of `failed` — don't write the `cancelled` status from
+  `cancel()` itself for a running session, that would race with the subprocess
+  loop's own write once the process actually exits. If it's merely `queued`
+  (waiting behind another session), there's no process yet, so `cancel()` writes
+  `cancelled` directly; `_run_session` then skips it (checks `status ==
+  queued` before ever spawning) when the worker gets to it. SIGTERM is not
+  caught anywhere in `scrapper`, so a cancelled run loses progress back to its
+  last periodic checkpoint save (every 50 successful downloads) — that's an
+  accepted tradeoff, not a bug to fix by adding signal handling to `scrapper`
+  itself unless asked.
 
 ## Two ways a session's `csv_input/` gets populated
 

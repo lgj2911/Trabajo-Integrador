@@ -97,6 +97,12 @@ class SessionManager:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._broadcaster = LogBroadcaster()
         self._worker_task: asyncio.Task[None] | None = None
+        # Tracks the one session currently occupying the single worker, if any --
+        # set only around the actual CLI subprocess's lifetime, so cancel() knows
+        # whether there's a live process to signal.
+        self._current_session_id: str | None = None
+        self._current_process: asyncio.subprocess.Process | None = None
+        self._cancel_requested = False
 
     def subscribe_logs(self, session_id: str) -> asyncio.Queue[str | None]:
         """Return a queue of live log lines for *session_id* (see LogBroadcaster).
@@ -113,6 +119,38 @@ class SessionManager:
     async def enqueue(self, session_id: str) -> None:
         """Schedule *session_id* to run once the worker is free."""
         await self._queue.put(session_id)
+
+    async def cancel(self, session_id: str) -> None:
+        """Cancel *session_id*, whether it's still queued or actively running.
+
+        If it's the session currently occupying the worker, sends SIGTERM to its
+        CLI subprocess and lets the normal completion path in
+        ``_run_cli_subprocess`` record the ``cancelled`` status once the process
+        actually exits -- not done here, to avoid a race between two writers.
+        Otherwise (queued but not yet started -- it may have been sitting behind
+        another long-running session), there's no process to signal, so the
+        ``cancelled`` status is recorded directly; ``_run_session`` skips a
+        session that's no longer ``queued`` when the worker gets to it.
+
+        A no-op if *session_id* isn't currently queued or running -- callers
+        should check the session's status first if that distinction matters.
+        """
+        if session_id == self._current_session_id and self._current_process is not None:
+            self._cancel_requested = True
+            with contextlib.suppress(ProcessLookupError):
+                self._current_process.terminate()
+            return
+        detail = await self._store.get(session_id)
+        if detail is None or detail.status != SessionStatus.queued:
+            return
+        await self._store.update_status(
+            session_id,
+            SessionStatus.cancelled,
+            SessionUpdate(
+                finished_at=datetime.now(timezone.utc),
+                error_message="Cancelled before it started running",
+            ),
+        )
 
     def start(self) -> None:
         """Start the single background worker task, if not already running."""
@@ -148,7 +186,9 @@ class SessionManager:
 
     async def _run_session(self, session_id: str) -> None:
         detail = await self._store.get(session_id)
-        if detail is None:
+        if detail is None or detail.status != SessionStatus.queued:
+            # Already cancelled (or otherwise no longer queued) while it was
+            # waiting its turn -- nothing to run.
             return
 
         session_dir = self._session_dir(session_id)
@@ -227,28 +267,42 @@ class SessionManager:
         await self._store.update_status(
             plan.session_id, SessionStatus.running, SessionUpdate(pid=process.pid)
         )
+        self._current_session_id = plan.session_id
+        self._current_process = process
+        self._cancel_requested = False
 
-        last_line = ""
-        if process.stdout is not None:
-            async for raw_line in process.stdout:
-                text = raw_line.decode("utf-8", errors="replace").rstrip("\n")
-                if text:
-                    last_line = text
-                await self._log_line(plan.session_id, plan.log_path, text)
+        try:
+            last_line = ""
+            if process.stdout is not None:
+                async for raw_line in process.stdout:
+                    text = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+                    if text:
+                        last_line = text
+                    await self._log_line(plan.session_id, plan.log_path, text)
 
-        return_code = await process.wait()
-        ok_count = len(read_manifest(plan.session_id, plan.output_dir / "manifest.csv"))
+            return_code = await process.wait()
+            ok_count = len(read_manifest(plan.session_id, plan.output_dir / "manifest.csv"))
 
-        if return_code == 0:
-            await self._finish(plan.session_id, SessionStatus.completed, ok_count=ok_count)
-        else:
-            error_message = last_line or f"process exited with code {return_code}"
-            await self._finish(
-                plan.session_id,
-                SessionStatus.failed,
-                ok_count=ok_count,
-                error_message=error_message,
-            )
+            if self._cancel_requested:
+                await self._finish(
+                    plan.session_id,
+                    SessionStatus.cancelled,
+                    ok_count=ok_count,
+                    error_message="Cancelled by operator",
+                )
+            elif return_code == 0:
+                await self._finish(plan.session_id, SessionStatus.completed, ok_count=ok_count)
+            else:
+                error_message = last_line or f"process exited with code {return_code}"
+                await self._finish(
+                    plan.session_id,
+                    SessionStatus.failed,
+                    ok_count=ok_count,
+                    error_message=error_message,
+                )
+        finally:
+            self._current_session_id = None
+            self._current_process = None
 
     async def _finish(
         self,

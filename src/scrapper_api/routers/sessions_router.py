@@ -240,6 +240,44 @@ async def get_session(
     return detail
 
 
+@router.post("/{session_id}/cancel", response_model=SessionDetail)
+async def cancel_session(
+    session_id: str,
+    request: Request,
+    _username: Annotated[str, Depends(require_auth)],
+) -> SessionDetail:
+    """Cancel a queued or running session.
+
+    If it's the session currently running, sends SIGTERM to its CLI subprocess
+    and lets the normal completion path record the final ``cancelled`` status
+    once the process actually exits -- so the returned detail may still show
+    ``running`` momentarily; poll ``GET /{session_id}`` (as the frontend
+    already does) to see the transition land.
+
+    Returns:
+        The session's detail, reflecting whatever the cancellation could
+        apply immediately.
+
+    Raises:
+        HTTPException: 404 if the session does not exist, 409 if it has
+            already reached a terminal status.
+    """
+    store = current_store(request)
+    manager = current_manager(request)
+
+    detail = await store.get(session_id)
+    if detail is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Session not found")
+    if detail.status in TERMINAL_SESSION_STATUSES:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Session has already finished")
+
+    await manager.cancel(session_id)
+    updated = await store.get(session_id)
+    if updated is None:  # pragma: no cover - defensive, cannot happen
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Session not found")
+    return updated
+
+
 def _read_existing_lines(log_path: Path) -> list[str]:
     """Read every line already written to *log_path*.
 

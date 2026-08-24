@@ -1,7 +1,13 @@
 // TypeScript shapes mirroring the frozen backend REST API contract exactly.
 // Do not rename fields or add fields the backend does not return.
 
-export type SessionStatus = "queued" | "running" | "completed" | "failed" | "interrupted";
+export type SessionStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "interrupted"
+  | "cancelled";
 export type SessionSource = "upload" | "portal";
 
 export interface SessionSummary {

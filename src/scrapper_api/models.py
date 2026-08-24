@@ -21,6 +21,7 @@ class SessionStatus(str, Enum):
     completed = "completed"
     failed = "failed"
     interrupted = "interrupted"
+    cancelled = "cancelled"
 
 
 #: Statuses that will never change again.
@@ -28,6 +29,7 @@ TERMINAL_SESSION_STATUSES = frozenset({
     SessionStatus.completed,
     SessionStatus.failed,
     SessionStatus.interrupted,
+    SessionStatus.cancelled,
 })
 
 #: Origin of the CSV input for a session: a user-uploaded zip, or a live fetch
