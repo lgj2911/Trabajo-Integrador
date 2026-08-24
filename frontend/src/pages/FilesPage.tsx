@@ -5,6 +5,9 @@ import { apiClient } from "../api/client";
 import { FILE_CATEGORIES } from "../api/types";
 import type { FileEntry, FileListResponse } from "../api/types";
 import { FileTable } from "../components/FileTable";
+import { Pagination } from "../components/Pagination";
+
+const PAGE_SIZE = 100;
 
 export default function FilesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -12,6 +15,7 @@ export default function FilesPage() {
   const source = searchParams.get("source") ?? "";
   const sessionId = searchParams.get("session_id") ?? "";
   const q = searchParams.get("q") ?? "";
+  const offset = Number(searchParams.get("offset") ?? "0");
 
   const [items, setItems] = useState<FileEntry[]>([]);
   const [total, setTotal] = useState(0);
@@ -27,7 +31,8 @@ export default function FilesPage() {
     if (source) params.set("source", source);
     if (sessionId) params.set("session_id", sessionId);
     if (q) params.set("q", q);
-    params.set("limit", "100");
+    params.set("limit", String(PAGE_SIZE));
+    params.set("offset", String(offset));
 
     apiClient
       .get<FileListResponse>(`/api/files?${params.toString()}`)
@@ -47,7 +52,7 @@ export default function FilesPage() {
     return () => {
       cancelled = true;
     };
-  }, [category, source, sessionId, q]);
+  }, [category, source, sessionId, q, offset]);
 
   function updateParam(key: string, value: string) {
     const next = new URLSearchParams(searchParams);
@@ -55,6 +60,10 @@ export default function FilesPage() {
       next.set(key, value);
     } else {
       next.delete(key);
+    }
+    // Any filter change invalidates the current page -- start back at the top.
+    if (key !== "offset") {
+      next.delete("offset");
     }
     setSearchParams(next);
   }
@@ -117,9 +126,13 @@ export default function FilesPage() {
       {!loading && !error && (
         <>
           <FileTable items={items} />
-          <p className="table-total">
-            {items.length} of {total} files
-          </p>
+          <Pagination
+            total={total}
+            limit={PAGE_SIZE}
+            offset={offset}
+            onOffsetChange={(next) => updateParam("offset", String(next))}
+            itemLabel="files"
+          />
         </>
       )}
     </div>

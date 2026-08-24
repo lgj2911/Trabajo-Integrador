@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiClient } from "../api/client";
 import type { SessionListResponse, SessionSummary } from "../api/types";
+import { Pagination } from "../components/Pagination";
 import { SessionStatusBadge } from "../components/SessionStatusBadge";
 
 const POLL_INTERVAL_MS = 4000;
+const PAGE_SIZE = 50;
 
 function isActive(status: SessionSummary["status"]): boolean {
   return status === "queued" || status === "running";
@@ -13,12 +15,15 @@ function isActive(status: SessionSummary["status"]): boolean {
 export default function ExecutionsPage() {
   const [items, setItems] = useState<SessionSummary[]>([]);
   const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchSessions = useCallback(async () => {
     try {
-      const data = await apiClient.get<SessionListResponse>("/api/sessions?limit=50&offset=0");
+      const data = await apiClient.get<SessionListResponse>(
+        `/api/sessions?limit=${PAGE_SIZE}&offset=${offset}`,
+      );
       setItems(data.items);
       setTotal(data.total);
       setError(null);
@@ -27,7 +32,7 @@ export default function ExecutionsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [offset]);
 
   useEffect(() => {
     fetchSessions();
@@ -93,9 +98,13 @@ export default function ExecutionsPage() {
               ))}
             </tbody>
           </table>
-          <p className="table-total">
-            {items.length} of {total} sessions
-          </p>
+          <Pagination
+            total={total}
+            limit={PAGE_SIZE}
+            offset={offset}
+            onOffsetChange={setOffset}
+            itemLabel="sessions"
+          />
         </div>
       )}
     </div>
