@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# Routine (re)deploy: build+push the backend image via ACR (no local Docker
-# required), deploy/update infrastructure via Bicep, and point the running
-# Container App at the freshly built image tag.
+# Routine (re)deploy: build+push the backend image with local Docker, deploy/update
+# infrastructure via Bicep, and point the running Container App at the freshly
+# built image tag.
+#
+# Builds locally rather than via `az acr build` (ACR Tasks) because some
+# subscription types (e.g. Azure for Students) get "(TasksOperationsNotAllowed)
+# ACR Tasks requests ... are not permitted" for every registry — a hard,
+# subscription-level block, not something retryable or fixable via config. Local
+# Docker build + `docker push` uses plain ACR push/pull instead, a separate
+# capability that isn't affected by that restriction.
 #
 # This script never touches secrets (WEBAPP_PASSWORD_HASH / SESSION_SECRET) —
 # that's scripts/set-secrets.sh's job, run once and rotated as needed, kept
@@ -14,7 +21,8 @@
 #   ./scripts/deploy.sh rg-scrapper-dev dev git-a1b2c3d
 #
 # Requires: az CLI logged in (`az login`), with the Bicep extension available
-# (`az bicep install` — az will offer to install it automatically on first use).
+# (`az bicep install` — az will offer to install it automatically on first use);
+# Docker installed and running locally.
 
 set -euo pipefail
 
@@ -40,6 +48,32 @@ az group show --name "$RESOURCE_GROUP" >/dev/null 2>&1 || {
   exit 1
 }
 
+# The registry itself must already exist (created by the bicep deploy in README
+# step 2, or a previous run of this script) — looked up directly rather than
+# re-deriving main.bicep's naming logic here.
+echo "==> Looking up the Container Registry in '$RESOURCE_GROUP'"
+ACR_NAME="$(az acr list --resource-group "$RESOURCE_GROUP" --query "[0].name" -o tsv)"
+if [[ -z "$ACR_NAME" ]]; then
+  echo "error: no Container Registry found in $RESOURCE_GROUP." >&2
+  echo "       Run the Bicep deploy first (infra/azure/README.md step 2)." >&2
+  exit 1
+fi
+ACR_LOGIN_SERVER="$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)"
+
+# --platform linux/amd64: Azure Container Apps runs x86_64 only, and this may be
+# built on an arm64 machine (e.g. Apple Silicon) — Docker Desktop cross-builds via
+# its bundled BuildKit/QEMU without any extra setup.
+echo "==> Building the image locally for linux/amd64: ${ACR_LOGIN_SERVER}/scrapper-api:${IMAGE_TAG}"
+docker build \
+  --platform linux/amd64 \
+  -f "$INFRA_DIR/Dockerfile" \
+  -t "${ACR_LOGIN_SERVER}/scrapper-api:${IMAGE_TAG}" \
+  "$REPO_ROOT"
+
+echo "==> Logging in to $ACR_LOGIN_SERVER and pushing the image"
+az acr login --name "$ACR_NAME"
+docker push "${ACR_LOGIN_SERVER}/scrapper-api:${IMAGE_TAG}"
+
 echo "==> Deploying infrastructure (Bicep) — image tag '$IMAGE_TAG'"
 DEPLOYMENT_NAME="scrapper-${ENVIRONMENT_NAME}-$(date +%s)"
 az deployment group create \
@@ -49,30 +83,8 @@ az deployment group create \
   --parameters containerImageTag="$IMAGE_TAG" \
   --name "$DEPLOYMENT_NAME"
 
-# Read the ACR login server straight back out of this deployment's outputs
-# rather than re-deriving main.bicep's naming logic here.
-ACR_LOGIN_SERVER="$(az deployment group show \
+echo "==> Done. Container App FQDN:"
+az deployment group show \
   --resource-group "$RESOURCE_GROUP" \
   --name "$DEPLOYMENT_NAME" \
-  --query "properties.outputs.acrLoginServer.value" -o tsv)"
-ACR_NAME="${ACR_LOGIN_SERVER%%.*}"
-CONTAINER_APP_NAME="scrapper-${ENVIRONMENT_NAME}-api"
-
-echo "==> Building and pushing image to $ACR_LOGIN_SERVER (no local Docker needed)"
-az acr build \
-  --registry "$ACR_NAME" \
-  --image "scrapper-api:${IMAGE_TAG}" \
-  --file "$INFRA_DIR/Dockerfile" \
-  "$REPO_ROOT"
-
-echo "==> Pointing the Container App at scrapper-api:${IMAGE_TAG}"
-az containerapp update \
-  --name "$CONTAINER_APP_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --image "${ACR_LOGIN_SERVER}/scrapper-api:${IMAGE_TAG}"
-
-echo "==> Done. Container App FQDN:"
-az containerapp show \
-  --name "$CONTAINER_APP_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --query "properties.configuration.ingress.fqdn" -o tsv
+  --query "properties.outputs.containerAppFqdn.value" -o tsv

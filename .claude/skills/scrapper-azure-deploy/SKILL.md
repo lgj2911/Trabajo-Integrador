@@ -58,8 +58,13 @@ accidentally rotate or wipe credentials.
   secrets**: all covered step-by-step in `infra/azure/README.md` — don't
   duplicate those exact commands here, they will drift out of sync.
 - **Backend-only redeploy**: `./scripts/deploy.sh <resource-group> <env>`
-  (rebuilds the image via `az acr build`, updates the Container App; does not
-  touch secrets or the frontend).
+  (rebuilds the image locally with Docker for `linux/amd64`, pushes it,
+  updates the Container App; does not touch secrets or the frontend). Builds
+  locally rather than via `az acr build`/ACR Tasks because some subscription
+  types (e.g. Azure for Students) get every ACR Tasks request rejected with
+  `TasksOperationsNotAllowed`, unrelated to registry settings or region —
+  local `docker push` uses a separate capability that restriction doesn't
+  touch. Requires Docker installed and running locally.
 - **Frontend-only redeploy**: rebuild (`npm run build` with
   `VITE_API_BASE_URL` pointed at the Container App's FQDN) and
   `az storage blob upload-batch -s ./dist -d '$web' --overwrite` against the
@@ -81,6 +86,14 @@ against the real `src/scrapper_api` package (uvicorn boots, `/docs` responds,
 weasyprint imports cleanly) — if it ever fails at PDF-render time with a
 missing shared library, re-check that apt package list against whatever
 weasyprint version is actually pinned in `uv.lock`.
+
+The repo root's `.dockerignore` matters more than it looks: this repo also
+holds multi-GB local scrape output at the root (`downloads/`,
+`downloads_santa_fe/`) that must never end up in a build context. It's an
+allow-list (`*` then `!`-reinclude only `pyproject.toml`, `uv.lock`,
+`src/scrapper`, `src/scrapper_api`) rather than a deny-list, specifically so
+it doesn't need updating every time something new and large shows up at the
+repo root.
 
 ## CI (`.github/workflows/ci.yml`)
 

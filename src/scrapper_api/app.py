@@ -54,6 +54,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             await manager.stop()
+            await store.close()
 
     app = FastAPI(title="Scrapper Web API", lifespan=lifespan)
     app.state.settings = resolved_settings

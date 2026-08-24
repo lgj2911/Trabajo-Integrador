@@ -1,0 +1,15 @@
+# infra/azure/Dockerfile only ever COPYs pyproject.toml, uv.lock, src/scrapper,
+# and src/scrapper_api into the image build context -- exclude everything else by
+# default. This repo also holds multi-GB local scrape output at the root
+# (downloads/, downloads_santa_fe/) that must never be packed into a build
+# context/upload; a plain deny-list would need updating every time something new
+# and large shows up here, so this is an allow-list instead.
+*
+
+!pyproject.toml
+!uv.lock
+!src
+!src/scrapper
+!src/scrapper/**
+!src/scrapper_api
+!src/scrapper_api/**

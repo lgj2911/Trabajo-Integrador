@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from scrapper_api.db import connect, init_db
+from scrapper_api.db import open_connection
 from scrapper_api.models import (
     SessionDetail,
     SessionListResponse,
@@ -70,10 +70,24 @@ class SessionStore:
     def __init__(self, db_path: Path, sessions_dir: Path) -> None:
         self._db_path = db_path
         self._sessions_dir = sessions_dir
+        self._conn: aiosqlite.Connection | None = None
 
     async def init(self) -> None:
-        """Create the underlying table if it does not exist yet."""
-        await init_db(self._db_path)
+        """Open the store's single long-lived connection, creating the table if needed."""
+        self._conn = await open_connection(self._db_path)
+
+    async def close(self) -> None:
+        """Close the store's connection. Safe to call even if ``init`` was never called."""
+        if self._conn is not None:
+            await self._conn.close()
+            self._conn = None
+
+    @property
+    def _connection(self) -> aiosqlite.Connection:
+        if self._conn is None:  # pragma: no cover - defensive, cannot happen via create_app
+            msg = "SessionStore.init() must be called before use"
+            raise RuntimeError(msg)
+        return self._conn
 
     @staticmethod
     def _row_to_summary(row: aiosqlite.Row) -> SessionSummary:
@@ -121,27 +135,27 @@ class SessionStore:
         """
         session_id = uuid.uuid4().hex
         created_at = datetime.now(timezone.utc).isoformat()
-        async with connect(self._db_path) as conn:
-            await conn.execute(
-                """
-                INSERT INTO sessions (
-                    id, status, source, created_at, started_at, finished_at,
-                    concurrency, delay, csv_files_json, error_message, pid, ok_count,
-                    resume_seed_count
-                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, 0, ?)
-                """,
-                (
-                    session_id,
-                    SessionStatus.queued.value,
-                    source,
-                    created_at,
-                    concurrency,
-                    delay,
-                    json.dumps(csv_files),
-                    resume_seed_count,
-                ),
-            )
-            await conn.commit()
+        conn = self._connection
+        await conn.execute(
+            """
+            INSERT INTO sessions (
+                id, status, source, created_at, started_at, finished_at,
+                concurrency, delay, csv_files_json, error_message, pid, ok_count,
+                resume_seed_count
+            ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, 0, ?)
+            """,
+            (
+                session_id,
+                SessionStatus.queued.value,
+                source,
+                created_at,
+                concurrency,
+                delay,
+                json.dumps(csv_files),
+                resume_seed_count,
+            ),
+        )
+        await conn.commit()
         detail = await self.get(session_id)
         if detail is None:  # pragma: no cover - defensive, cannot happen
             msg = f"session {session_id} vanished right after creation"
@@ -154,9 +168,10 @@ class SessionStore:
         Returns:
             The session detail, or ``None`` if no such session exists.
         """
-        async with connect(self._db_path) as conn:
-            cursor = await conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
-            row = await cursor.fetchone()
+        cursor = await self._connection.execute(
+            "SELECT * FROM sessions WHERE id = ?", (session_id,)
+        )
+        row = await cursor.fetchone()
         return self._row_to_detail(row) if row is not None else None
 
     async def list_sessions(
@@ -171,27 +186,27 @@ class SessionStore:
         Returns:
             A page of session summaries plus the total matching count.
         """
-        async with connect(self._db_path) as conn:
-            if status is not None:
-                count_cursor = await conn.execute(
-                    "SELECT COUNT(*) AS n FROM sessions WHERE status = ?", (status.value,)
-                )
-                total_row = await count_cursor.fetchone()
-                cursor = await conn.execute(
-                    """
-                    SELECT * FROM sessions WHERE status = ?
-                    ORDER BY created_at DESC LIMIT ? OFFSET ?
-                    """,
-                    (status.value, limit, offset),
-                )
-            else:
-                count_cursor = await conn.execute("SELECT COUNT(*) AS n FROM sessions")
-                total_row = await count_cursor.fetchone()
-                cursor = await conn.execute(
-                    "SELECT * FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                    (limit, offset),
-                )
-            rows = await cursor.fetchall()
+        conn = self._connection
+        if status is not None:
+            count_cursor = await conn.execute(
+                "SELECT COUNT(*) AS n FROM sessions WHERE status = ?", (status.value,)
+            )
+            total_row = await count_cursor.fetchone()
+            cursor = await conn.execute(
+                """
+                SELECT * FROM sessions WHERE status = ?
+                ORDER BY created_at DESC LIMIT ? OFFSET ?
+                """,
+                (status.value, limit, offset),
+            )
+        else:
+            count_cursor = await conn.execute("SELECT COUNT(*) AS n FROM sessions")
+            total_row = await count_cursor.fetchone()
+            cursor = await conn.execute(
+                "SELECT * FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
+        rows = await cursor.fetchall()
         total = int(total_row["n"]) if total_row is not None else 0
         return SessionListResponse(
             items=[self._row_to_summary(row) for row in rows],
@@ -204,12 +219,11 @@ class SessionStore:
         Returns:
             The matching sessions, in creation order.
         """
-        async with connect(self._db_path) as conn:
-            cursor = await conn.execute(
-                "SELECT * FROM sessions WHERE status = ? ORDER BY created_at ASC",
-                (status.value,),
-            )
-            rows = await cursor.fetchall()
+        cursor = await self._connection.execute(
+            "SELECT * FROM sessions WHERE status = ? ORDER BY created_at ASC",
+            (status.value,),
+        )
+        rows = await cursor.fetchall()
         return [self._row_to_detail(row) for row in rows]
 
     async def update_status(
@@ -221,37 +235,36 @@ class SessionStore:
         """Update a session's status and any fields set on *update*.
 
         Only fields explicitly set (non-``None``) on *update* are changed; the
-        others keep their current stored value.
+        others keep their current stored value. Issued as a single atomic
+        UPDATE, not a sequence of statements: this store's connection is
+        shared and long-lived (see ``db.py``), so a multi-statement update
+        here would let a concurrent read on the same connection observe
+        partially-applied state (e.g. status already ``completed`` but
+        ``ok_count``/``finished_at`` not yet set).
         """
         fields = update or SessionUpdate()
-        async with connect(self._db_path) as conn:
-            await conn.execute(
-                "UPDATE sessions SET status = ? WHERE id = ?", (status.value, session_id)
-            )
-            if fields.started_at is not None:
-                await conn.execute(
-                    "UPDATE sessions SET started_at = ? WHERE id = ?",
-                    (fields.started_at.isoformat(), session_id),
-                )
-            if fields.finished_at is not None:
-                await conn.execute(
-                    "UPDATE sessions SET finished_at = ? WHERE id = ?",
-                    (fields.finished_at.isoformat(), session_id),
-                )
-            if fields.error_message is not None:
-                await conn.execute(
-                    "UPDATE sessions SET error_message = ? WHERE id = ?",
-                    (fields.error_message, session_id),
-                )
-            if fields.ok_count is not None:
-                await conn.execute(
-                    "UPDATE sessions SET ok_count = ? WHERE id = ?", (fields.ok_count, session_id)
-                )
-            if fields.pid is not None:
-                await conn.execute(
-                    "UPDATE sessions SET pid = ? WHERE id = ?", (fields.pid, session_id)
-                )
-            await conn.commit()
+        await self._connection.execute(
+            """
+            UPDATE sessions SET
+                status = ?,
+                started_at = COALESCE(?, started_at),
+                finished_at = COALESCE(?, finished_at),
+                error_message = COALESCE(?, error_message),
+                ok_count = COALESCE(?, ok_count),
+                pid = COALESCE(?, pid)
+            WHERE id = ?
+            """,
+            (
+                status.value,
+                fields.started_at.isoformat() if fields.started_at is not None else None,
+                fields.finished_at.isoformat() if fields.finished_at is not None else None,
+                fields.error_message,
+                fields.ok_count,
+                fields.pid,
+                session_id,
+            ),
+        )
+        await self._connection.commit()
 
     async def reconcile_stale_running(self) -> list[str]:
         """Flip every ``running`` session whose pid is no longer alive to ``interrupted``.
@@ -261,9 +274,10 @@ class SessionStore:
         """
         stale_ids: list[str] = []
         for detail in await self.list_by_status(SessionStatus.running):
-            async with connect(self._db_path) as conn:
-                cursor = await conn.execute("SELECT pid FROM sessions WHERE id = ?", (detail.id,))
-                row = await cursor.fetchone()
+            cursor = await self._connection.execute(
+                "SELECT pid FROM sessions WHERE id = ?", (detail.id,)
+            )
+            row = await cursor.fetchone()
             pid = row["pid"] if row is not None else None
             if pid is None or not _is_pid_alive(int(pid)):
                 await self.update_status(

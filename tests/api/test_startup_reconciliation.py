@@ -114,7 +114,11 @@ class TestStartupReconciliationViaAppLifespan:
 
         async def check() -> None:
             store = SessionStore(settings.db_path, settings.sessions_dir)
-            final = await store.get(session_id)
+            await store.init()
+            try:
+                final = await store.get(session_id)
+            finally:
+                await store.close()
             assert final is not None
             assert final.status == SessionStatus.interrupted
 

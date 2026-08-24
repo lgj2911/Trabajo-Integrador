@@ -68,6 +68,12 @@ compute if traffic/usage patterns turn out heavier than expected.
 - An Azure subscription with the credit/budget applied
 - Node.js + npm (to `npm run build` the frontend in step 5 — no separate CLI
   tool needed to deploy it, unlike Azure Static Web Apps' `swa` CLI)
+- [Docker](https://docs.docker.com/get-docker/) installed and running, to build
+  the backend image locally in step 3. `az acr build` (a remote build via ACR
+  Tasks, no local Docker needed) would be the alternative, but some
+  subscription types (e.g. Azure for Students) get every ACR Tasks request
+  rejected with `TasksOperationsNotAllowed` regardless of registry or region —
+  see the Troubleshooting section below.
 
 ## Step-by-step: provisioning from zero
 
@@ -116,9 +122,10 @@ You'll want `acrLoginServer`, `containerAppFqdn`, `frontendUrl`, and
 
 ### 3. Build and push the backend image, deploy it
 
-`scripts/deploy.sh` does this for you: builds the image via `az acr build`
-(no local Docker required — the build happens in Azure), re-runs the Bicep
-deployment with the new image tag, and points the Container App at it.
+`scripts/deploy.sh` does this for you: builds the image locally with Docker
+(for `linux/amd64`, regardless of your machine's own architecture — Container
+Apps only runs x86_64), pushes it to the registry, then re-runs the Bicep
+deployment with the new image tag so the Container App picks it up.
 
 ```bash
 ./scripts/deploy.sh "$RESOURCE_GROUP" "$ENVIRONMENT_NAME"
@@ -194,10 +201,13 @@ assignment for a single-operator hobby deployment.)
 
 The Container App's `CORS_ORIGINS` env var is set by Bicep to the static
 website's URL automatically (`main.bicep` wires the `staticWebsite` module's
-`webEndpoint` output straight into the `container-app` module). If you later
-add a custom domain in front of the static website, redeploy Bicep with that
-domain included — `CORS_ORIGINS` accepts a comma-separated list; you'll need
-to extend `main.bicep`'s `corsOrigins` expression to include it.
+`webEndpoint` output straight into the `container-app` module, as a
+single-element array — `container-app.bicep` JSON-encodes it before setting
+the env var, since the backend's `Settings.cors_origins` is a `list[str]` and
+pydantic-settings expects list-typed env vars to be JSON, not a bare or
+comma-joined string). If you later add a custom domain in front of the static
+website, redeploy Bicep with that domain added as another array element in
+`main.bicep`'s `corsOrigins` expression.
 
 ## Troubleshooting: `RequestDisallowedByAzure`
 
@@ -222,6 +232,19 @@ subscription:
 Once you've found an allowed region, set it as `location` in
 `parameters/<env>.bicepparam` — it drives every resource in this template
 uniformly.
+
+## Troubleshooting: `TasksOperationsNotAllowed`
+
+If `scripts/deploy.sh` (or a manual `az acr build`) fails with
+`"(TasksOperationsNotAllowed) ACR Tasks requests for the registry ... are not
+permitted"`, your subscription has ACR Tasks (the remote-build service behind
+`az acr build`/`az acr run`) blocked outright — again common on restricted
+subscription types like Azure for Students. This isn't about registry
+settings or region; there's no config fix. `scripts/deploy.sh` already
+sidesteps it by building the image locally with Docker and pushing it
+directly (plain registry push/pull, a separate capability ACR Tasks
+restrictions don't affect) — make sure Docker is installed and running, per
+the Prerequisites above.
 
 ## Redeploying after code changes
 

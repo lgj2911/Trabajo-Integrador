@@ -99,8 +99,10 @@ module containerApp 'modules/container-app.bicep' = {
     webappPasswordHash: webappPasswordHash
     sessionSecret: sessionSecret
     // The backend's CORS allow-list must include the static website's origin so
-    // the frontend (a different origin) can call it.
-    corsOrigins: staticWebsite.outputs.webEndpoint
+    // the frontend (a different origin) can call it. An array here, not a
+    // comma-joined string: Settings.cors_origins is a list[str], and
+    // container-app.bicep JSON-encodes this before setting CORS_ORIGINS.
+    corsOrigins: [staticWebsite.outputs.webEndpoint]
     minReplicas: 0
   }
 }

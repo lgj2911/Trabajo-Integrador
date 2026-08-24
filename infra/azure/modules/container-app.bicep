@@ -42,8 +42,8 @@ param webappPasswordHash string = ''
 @secure()
 param sessionSecret string = ''
 
-@description('Comma-separated list of allowed CORS origins (must include the static website\'s https URL).')
-param corsOrigins string
+@description('Allowed CORS origins (must include the static website\'s https URL). Passed to the container as CORS_ORIGINS, JSON-encoded -- Settings.cors_origins is a list[str], and pydantic-settings JSON-decodes env vars for list-typed fields, so a bare/comma-joined string here would crash the app on every boot with a SettingsError.')
+param corsOrigins array
 
 @description('Minimum replica count. 0 enables scale-to-zero for cost; a cold start will incur request latency on the next call.')
 param minReplicas int = 0
@@ -167,7 +167,7 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
               : { name: 'SESSION_SECRET', secretRef: 'session-secret' }
             {
               name: 'CORS_ORIGINS'
-              value: corsOrigins
+              value: string(corsOrigins)
             }
           ]
           volumeMounts: [
