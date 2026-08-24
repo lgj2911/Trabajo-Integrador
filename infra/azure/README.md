@@ -174,10 +174,13 @@ Enable static-website mode on the Storage Account (idempotent — safe to
 re-run) and upload the build to its `$web` container:
 
 ```bash
-STATIC_SITE_ACCOUNT=$(az deployment group show \
+# Looked up directly by naming convention (main.bicep: 'web' + environment name +
+# suffix) rather than via a deployment's outputs -- deployment names vary
+# (scripts/deploy.sh uses its own timestamped name, not the CLI's "main" default
+# from step 2), so relying on one specific deployment record here is fragile.
+STATIC_SITE_ACCOUNT=$(az storage account list \
   --resource-group "$RESOURCE_GROUP" \
-  --name main \
-  --query "properties.outputs.staticWebsiteAccountName.value" -o tsv)
+  --query "[?starts_with(name, 'web${ENVIRONMENT_NAME}')].name | [0]" -o tsv)
 
 STATIC_SITE_KEY=$(az storage account keys list \
   --account-name "$STATIC_SITE_ACCOUNT" \
