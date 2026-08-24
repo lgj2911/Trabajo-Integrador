@@ -17,11 +17,22 @@
 # .bicepparam file), main.bicep's container-app module leaves WEBAPP_PASSWORD_HASH
 # and SESSION_SECRET wired as plain empty-string env vars, not secretRefs -- Azure
 # Container Apps rejects an empty-string secret value, so nothing can be declared
-# there yet. This script both sets the secret values AND rewires the env vars to
-# pull from them via `--set-env-vars ...=secretref:...`; that rewire is itself a
-# template change, which reliably creates a new revision in single-revision mode
-# (a secret value change alone would not), so the app always ends up running with
-# the values just set -- no separate manual restart needed, on first run or rotate.
+# there yet. This script sets the secret values AND (re)wires the env vars to pull
+# from them via `--set-env-vars ...=secretref:...`, forcing a brand new revision
+# every time via --revision-suffix.
+#
+# The forced new revision is required, not cosmetic: `az containerapp secret set`
+# updates the secret's stored value but explicitly warns "must be restarted for
+# secret changes to take effect" -- and empirically, neither that warning's
+# "restart" nor `az containerapp revision restart` on the *existing* revision
+# actually re-resolves secretRef env vars against the new value. Only a genuinely
+# new revision does. On the very first run, --set-env-vars is itself a template
+# change (empty value -> secretRef) that creates a new revision on its own; on
+# every rotation after that, the secretRef *string* is textually unchanged
+# ("secretref:webapp-password-hash" both times) even though the value behind it
+# changed, so Container Apps sees no template diff and silently keeps serving the
+# stale revision with the old value -- this bit us in practice (secret rotated
+# twice, container restarted twice, login still failed with the old password).
 
 set -euo pipefail
 
@@ -59,13 +70,14 @@ az containerapp secret set \
     "webapp-password-hash=${WEBAPP_PASSWORD_HASH}" \
     "session-secret=${SESSION_SECRET}"
 
-echo "==> Wiring WEBAPP_PASSWORD_HASH/SESSION_SECRET to pull from those secrets (triggers a new revision)"
+echo "==> Wiring WEBAPP_PASSWORD_HASH/SESSION_SECRET to pull from those secrets, forcing a new revision"
 az containerapp update \
   --name "$CONTAINER_APP_NAME" \
   --resource-group "$RESOURCE_GROUP" \
   --set-env-vars \
     "WEBAPP_PASSWORD_HASH=secretref:webapp-password-hash" \
     "SESSION_SECRET=secretref:session-secret" \
+  --revision-suffix "secrets$(date +%s)" \
   >/dev/null
 
-echo "==> Done. Secrets are set and the running revision picks them up."
+echo "==> Done. New revision deployed with the values just set."
