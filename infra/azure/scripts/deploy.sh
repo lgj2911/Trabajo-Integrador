@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Routine (re)deploy: build+push the backend image with local Docker, deploy/update
-# infrastructure via Bicep, and point the running Container App at the freshly
-# built image tag.
+# Routine (re)deploy: build+push the backend image with local Docker, then
+# point the already-provisioned Container App at the freshly built image tag
+# via a scoped `az containerapp update --image` (see the comment further down
+# for why this must not be a full Bicep redeploy). For actual infra changes
+# (editing a .bicep file), re-run the Bicep deploy from README.md step 2
+# instead — this script only ever swaps the image.
 #
 # Builds locally rather than via `az acr build` (ACR Tasks) because some
 # subscription types (e.g. Azure for Students) get "(TasksOperationsNotAllowed)
@@ -74,17 +77,28 @@ echo "==> Logging in to $ACR_LOGIN_SERVER and pushing the image"
 az acr login --name "$ACR_NAME"
 docker push "${ACR_LOGIN_SERVER}/scrapper-api:${IMAGE_TAG}"
 
-echo "==> Deploying infrastructure (Bicep) — image tag '$IMAGE_TAG'"
-DEPLOYMENT_NAME="scrapper-${ENVIRONMENT_NAME}-$(date +%s)"
-az deployment group create \
+# A scoped `az containerapp update --image`, not a full `az deployment group
+# create` against main.bicep. Bicep deployments are declarative: main.bicep's
+# webappPasswordHash/sessionSecret params default to '' (deliberately, so a
+# real value never has to live in a checked-in .bicepparam file), and neither
+# this script nor PARAMETERS_FILE ever passes the real values. Re-running the
+# full template would therefore recompute container-app.bicep's `secrets` /
+# env-var arrays with those empty defaults and silently delete whatever
+# scripts/set-secrets.sh had set — this actually happened in practice (a
+# routine image redeploy wiped WEBAPP_PASSWORD_HASH/SESSION_SECRET and broke
+# login). `--image` only patches the container's image reference, leaving
+# secrets, env vars, and everything else in the existing revision untouched —
+# the same partial-update primitive set-secrets.sh already relies on.
+echo "==> Updating the Container App to image tag '$IMAGE_TAG'"
+CONTAINER_APP_NAME="scrapper-${ENVIRONMENT_NAME}-api"
+az containerapp update \
+  --name "$CONTAINER_APP_NAME" \
   --resource-group "$RESOURCE_GROUP" \
-  --template-file "$INFRA_DIR/main.bicep" \
-  --parameters "$PARAMETERS_FILE" \
-  --parameters containerImageTag="$IMAGE_TAG" \
-  --name "$DEPLOYMENT_NAME"
+  --image "${ACR_LOGIN_SERVER}/scrapper-api:${IMAGE_TAG}" \
+  >/dev/null
 
 echo "==> Done. Container App FQDN:"
-az deployment group show \
+az containerapp show \
+  --name "$CONTAINER_APP_NAME" \
   --resource-group "$RESOURCE_GROUP" \
-  --name "$DEPLOYMENT_NAME" \
-  --query "properties.outputs.containerAppFqdn.value" -o tsv
+  --query "properties.configuration.ingress.fqdn" -o tsv

@@ -48,8 +48,22 @@ _VALID_SOURCES = ("upload", "portal")
 _SSE_POLL_TIMEOUT_SECONDS = 1.0
 
 
-def _validate_and_extract_upload_to_tempdir(file: UploadFile) -> tuple[Path, list[str]]:
+def _validate_and_extract_upload_to_tempdir(
+    file: UploadFile, sessions_dir: Path
+) -> tuple[Path, list[str]]:
     """Validate an uploaded zip and extract it into a fresh temp directory.
+
+    The temp directory is created under *sessions_dir* rather than the
+    system default (e.g. the container's local ``/tmp``) so that the later
+    ``shutil.move(tmp_dir, session_dir / "csv_input")`` in ``create_session``
+    stays on the same filesystem. In production ``sessions_dir`` is an Azure
+    Files share mounted at ``/data``, a different device than the container's
+    local disk -- crossing devices makes ``shutil.move`` fall back to
+    ``copytree``, whose ``copystat`` call fails with ``[Errno 1] Operation
+    not permitted`` on that SMB mount (chmod/utime aren't supported the way
+    a local filesystem supports them), which surfaces to the browser as a
+    CORS-less 500 that looks like "failed to reach the server" rather than
+    the real error.
 
     Returns:
         The temp directory path and the canonical CSV filenames it contains.
@@ -57,7 +71,8 @@ def _validate_and_extract_upload_to_tempdir(file: UploadFile) -> tuple[Path, lis
     Raises:
         UploadValidationError: if the zip fails validation.
     """
-    tmp_dir = Path(tempfile.mkdtemp(prefix="scrapper_upload_"))
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = Path(tempfile.mkdtemp(prefix="scrapper_upload_", dir=str(sessions_dir)))
     try:
         extracted = validate_and_extract_zip(file.file, tmp_dir)
     except UploadValidationError:
@@ -168,7 +183,7 @@ async def create_session(  # noqa: PLR0913, PLR0917 -- FastAPI multipart endpoin
         assert file is not None  # narrowed by the check above
         try:
             tmp_dir, csv_files = await asyncio.to_thread(
-                _validate_and_extract_upload_to_tempdir, file
+                _validate_and_extract_upload_to_tempdir, file, settings.sessions_dir
             )
         except UploadValidationError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

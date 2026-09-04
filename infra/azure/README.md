@@ -124,8 +124,9 @@ You'll want `acrLoginServer`, `containerAppFqdn`, `frontendUrl`, and
 
 `scripts/deploy.sh` does this for you: builds the image locally with Docker
 (for `linux/amd64`, regardless of your machine's own architecture — Container
-Apps only runs x86_64), pushes it to the registry, then re-runs the Bicep
-deployment with the new image tag so the Container App picks it up.
+Apps only runs x86_64), pushes it to the registry, then runs a scoped
+`az containerapp update --image` so the Container App picks it up — not a full
+Bicep redeploy (see the note below on why that matters for secrets).
 
 ```bash
 ./scripts/deploy.sh "$RESOURCE_GROUP" "$ENVIRONMENT_NAME"
@@ -190,8 +191,9 @@ re-run) and upload the build to its `$web` container:
 ```bash
 # Looked up directly by naming convention (main.bicep: 'web' + environment name +
 # suffix) rather than via a deployment's outputs -- deployment names vary
-# (scripts/deploy.sh uses its own timestamped name, not the CLI's "main" default
-# from step 2), so relying on one specific deployment record here is fragile.
+# across separate `az deployment group create` runs (e.g. step 2's default
+# "main" vs. a later manual re-run's own name), so relying on one specific
+# deployment record here is fragile.
 STATIC_SITE_ACCOUNT=$(az storage account list \
   --resource-group "$RESOURCE_GROUP" \
   --query "[?starts_with(name, 'web${ENVIRONMENT_NAME}')].name | [0]" -o tsv)
@@ -294,8 +296,10 @@ the Prerequisites above.
   `mcr.microsoft.com/k8se/quickstart:latest` placeholder rather than
   `scrapper-api:latest` — the freshly created ACR is empty, so that tag
   doesn't exist yet. `containerImageTag == 'latest'` is the sentinel for
-  "no real image has been pushed"; `scripts/deploy.sh` always overrides it
-  with a concrete git-SHA tag once it has actually built and pushed one.
+  "no real image has been pushed"; the first run of `scripts/deploy.sh` swaps
+  in a concrete git-SHA tag via `az containerapp update --image` once it has
+  actually built and pushed one (every later redeploy does the same scoped
+  update, never a full Bicep redeploy — see step 3's note on secrets).
 - The Dockerfile has been built and run end-to-end against the finalized
   `src/scrapper_api` package (`docker build` succeeds, the container boots
   `uvicorn`, serves `/docs`/`/openapi.json`, and `weasyprint` imports
