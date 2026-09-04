@@ -65,39 +65,41 @@ export default function ExecutionsPage() {
       )}
 
       {!loading && !error && items.length > 0 && (
-        <div className="table-scroll">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Status</th>
-                <th>Source</th>
-                <th>Created</th>
-                <th>Started</th>
-                <th>Finished</th>
-                <th>OK count</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((session) => (
-                <tr key={session.id}>
-                  <td>
-                    <Link to={`/executions/${session.id}`} className="mono">
-                      {session.id}
-                    </Link>
-                  </td>
-                  <td>
-                    <SessionStatusBadge status={session.status} />
-                  </td>
-                  <td>{session.source}</td>
-                  <td>{session.created_at}</td>
-                  <td>{session.started_at ?? "—"}</td>
-                  <td>{session.finished_at ?? "—"}</td>
-                  <td>{session.ok_count}</td>
+        <div className="table-card">
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Status</th>
+                  <th>Source</th>
+                  <th>Created</th>
+                  <th>Started</th>
+                  <th>Finished</th>
+                  <th>OK count</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {items.map((session) => (
+                  <tr key={session.id}>
+                    <td>
+                      <Link to={`/executions/${session.id}`} className="mono">
+                        {session.id}
+                      </Link>
+                    </td>
+                    <td>
+                      <SessionStatusBadge status={session.status} />
+                    </td>
+                    <td>{session.source}</td>
+                    <td>{session.created_at}</td>
+                    <td>{session.started_at ?? "—"}</td>
+                    <td>{session.finished_at ?? "—"}</td>
+                    <td>{session.ok_count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <Pagination
             total={total}
             limit={PAGE_SIZE}
