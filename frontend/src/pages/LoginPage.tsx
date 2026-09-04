@@ -45,7 +45,7 @@ export default function LoginPage() {
   return (
     <div className="auth-page">
       <form className="auth-form" onSubmit={handleSubmit}>
-        <h1>Scrapper Console</h1>
+        <h1>Classiflow - Scrapper Console</h1>
         <p className="auth-subtitle">Sign in to manage municipal document scrapes.</p>
 
         <label htmlFor="username">Username</label>

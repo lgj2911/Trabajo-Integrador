@@ -14,7 +14,7 @@ export function AppLayout() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <span className="app-title">Rosario Scrapper Console</span>
+        <span className="app-title">Classiflow - Scrapper Console</span>
         <nav className="app-nav">
           <NavLink to="/upload" className={({ isActive }) => (isActive ? "active" : "")}>
             New scrape
